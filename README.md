@@ -60,7 +60,9 @@ sudo "/Library/Application Support/NeSpatPrivileged/Uninstall" --uninstall
 
 ```sh
 bash scripts/test.sh
-bash scripts/release/build.sh "$PWD/dist"
+python3 -m venv .build/dmg-tools
+.build/dmg-tools/bin/pip install dmgbuild==1.6.5
+PATH="$PWD/.build/dmg-tools/bin:$PATH" bash scripts/release/build.sh "$PWD/dist"
 ```
 
 Готовый образ появится в `dist/NeSpat.dmg`.

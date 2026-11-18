@@ -47,7 +47,6 @@ xcrun swiftc -O -target arm64-apple-macos14.0 -file-prefix-map "$PWD=NeSpat" scr
 productbuild --distribution scripts/release/distribution.xml --resources "$stage/resources" --package-path "$stage/pkg" "$launcher/Resources/Services.pkg"
 codesign -fs - --options runtime "$stage/image/NeSpat.app"
 codesign --verify --deep --strict "$stage/image/NeSpat.app"
-ln -s /Applications "$stage/image/Applications"
-hdiutil create -quiet -fs HFS+ -volname NeSpat -srcfolder "$stage/image" -format UDZO "$out/NeSpat.dmg"
+bash scripts/release/image.sh "$stage/image/NeSpat.app" "$out/NeSpat.dmg"
 hdiutil verify "$out/NeSpat.dmg"
 (cd "$out" && shasum -a 256 NeSpat.dmg > SHA256.txt)
