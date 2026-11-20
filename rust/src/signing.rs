@@ -117,3 +117,69 @@ pub unsafe extern "C" fn nespat_code_pin(hash: CFStringRef, id: CFStringRef) -> 
         ManuallyDrop::new(CFString::new(&s)).as_concrete_TypeRef()
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, process::Command};
+    fn accepts(path: &std::path::Path, requirement: &str, hardened: bool) -> bool {
+        let url = core_foundation::url::CFURL::from_path(path, false).unwrap();
+        nespat_matches_code(
+            url.as_concrete_TypeRef(),
+            CFString::new(requirement).as_concrete_TypeRef(),
+            hardened,
+        )
+    }
+    #[test]
+    fn only_exact_hardened_signed_fixture_matches_its_pin() {
+        let folder = tempfile::tempdir().unwrap();
+        let binary = folder.path().join("signed");
+        fs::copy("/bin/echo", &binary).unwrap();
+        let sign = |runtime: bool| {
+            let mut cmd = Command::new("/usr/bin/codesign");
+            cmd.args(["-fs", "-", "--identifier", "local.nespat.fixture"]);
+            if runtime {
+                cmd.args(["--options", "runtime"]);
+            }
+            assert!(cmd.arg(&binary).output().unwrap().status.success());
+            let out = Command::new("/usr/bin/codesign")
+                .args(["-dv", "--verbose=4"])
+                .arg(&binary)
+                .output()
+                .unwrap();
+            let text = String::from_utf8(out.stderr).unwrap();
+            text.lines()
+                .find_map(|l| l.strip_prefix("CDHash="))
+                .unwrap()
+                .to_owned()
+        };
+        let hash = sign(true);
+        let req = pin(&hash, "local.nespat.fixture").unwrap();
+        assert!(accepts(&binary, &req, true));
+        assert!(!accepts(
+            &binary,
+            &pin(&hash, "local.nespat.other").unwrap(),
+            true
+        ));
+        assert!(!accepts(
+            &binary,
+            &pin(&"0".repeat(40), "local.nespat.fixture").unwrap(),
+            true
+        ));
+        let bare = pin(&sign(false), "local.nespat.fixture").unwrap();
+        assert!(accepts(&binary, &bare, false));
+        assert!(!accepts(&binary, &bare, true));
+        assert!(!accepts(&binary, &req, true));
+        fs::write(&binary, b"unsigned").unwrap();
+        assert!(!accepts(&binary, &bare, false));
+    }
+    #[test]
+    fn malformed_pins_and_identifiers_are_rejected() {
+        for h in ["", "ff", &"f".repeat(39), &"f".repeat(41), &"g".repeat(40)] {
+            assert!(pin(h, "app").is_none());
+        }
+        for id in ["", "invalid name", "a/b", "a\"b", &"a".repeat(256)] {
+            assert!(pin(&"a".repeat(40), id).is_none());
+        }
+    }
+}

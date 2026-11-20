@@ -112,3 +112,54 @@ fn current() -> Option<Battery> {
 pub extern "C" fn nespat_current_battery() -> Battery {
     current().unwrap_or_default()
 }
+
+#[cfg(test)]
+mod regression {
+    use super::*;
+    #[test]
+    fn charging_source_and_fractional_capacity_are_independent() {
+        for (source, external) in [("AC Power", 1), ("Battery Power", 0), ("unspecified", -1)] {
+            let d = CFDictionary::from_CFType_pairs(&[
+                (
+                    CFString::new("Power Source State"),
+                    CFString::new(source).as_CFType(),
+                ),
+                (
+                    CFString::new("Is Charging"),
+                    CFBoolean::false_value().as_CFType(),
+                ),
+                (
+                    CFString::new("Current Capacity"),
+                    CFNumber::from(101).as_CFType(),
+                ),
+                (
+                    CFString::new("Max Capacity"),
+                    CFNumber::from(1000).as_CFType(),
+                ),
+                (
+                    CFString::new("Time to Empty"),
+                    CFNumber::from(37).as_CFType(),
+                ),
+            ]);
+            let b = parse(&d.to_untyped());
+            assert_eq!((b.external, b.charging, b.charged), (external, 0, -1));
+            assert!((b.percent - 10.1).abs() < 1e-12);
+            assert_eq!(b.minutes, if external == 0 { 37 } else { -1 });
+            if external == 0 {
+                assert_eq!(
+                    crate::policy::nespat_assess(b.percent, b.external, 30., 0, false),
+                    0
+                );
+            }
+        }
+        for (current, max) in [(-1, 100), (1, 0), (101, 100)] {
+            let d = CFDictionary::from_CFType_pairs(&[
+                (CFString::new("Current Capacity"), CFNumber::from(current)),
+                (CFString::new("Max Capacity"), CFNumber::from(max)),
+            ]);
+            let b = parse(&d.to_untyped());
+            assert!(b.percent.is_nan());
+            assert_eq!((b.charging, b.external, b.minutes), (-1, -1, -1));
+        }
+    }
+}

@@ -67,8 +67,33 @@ impl Status {
         }
     }
 }
-pub struct Driver {
-    backend: Session,
+pub trait SessionBackend {
+    fn observe(&mut self) -> Option<SessionObservation>;
+    fn prepare(&mut self) -> bool;
+    fn keep_alive(&mut self, id: [u8; 16]) -> bool;
+    fn display(&mut self, id: [u8; 16]) -> bool;
+    fn recover(&mut self, id: [u8; 16], manual: bool) -> bool;
+}
+impl SessionBackend for Session {
+    fn observe(&mut self) -> Option<SessionObservation> {
+        Session::observe(self)
+    }
+    fn prepare(&mut self) -> bool {
+        Session::prepare(self)
+    }
+    fn keep_alive(&mut self, id: [u8; 16]) -> bool {
+        nespat_session_heartbeat(self, &id)
+    }
+    fn display(&mut self, id: [u8; 16]) -> bool {
+        Session::display(self, id)
+    }
+    fn recover(&mut self, id: [u8; 16], manual: bool) -> bool {
+        Session::recover(self, id, manual)
+    }
+}
+pub type Driver = SessionDriver<Session>;
+pub struct SessionDriver<B> {
+    backend: B,
     known: Option<Lease>,
     last: f64,
     exhausted: bool,
@@ -76,7 +101,7 @@ pub struct Driver {
     display_error: bool,
     pub status: Status,
 }
-impl Default for Driver {
+impl<B: Default> Default for SessionDriver<B> {
     fn default() -> Self {
         Self {
             backend: Default::default(),
@@ -92,7 +117,7 @@ impl Default for Driver {
         }
     }
 }
-impl Driver {
+impl<B: SessionBackend> SessionDriver<B> {
     fn phase(&mut self, phase: Phase, reason: Option<&str>) {
         self.status.phase = phase;
         self.status.reason = reason.map(str::to_owned);
@@ -187,7 +212,7 @@ impl Driver {
             }
             Action::KeepActive => {
                 let id = lease?.id;
-                if !prepared && !nespat_session_heartbeat(&mut self.backend, &id) {
+                if !prepared && !self.backend.keep_alive(id) {
                     return None;
                 }
                 if o.lid == 0 {
@@ -285,5 +310,238 @@ impl Driver {
                 .into(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod regression {
+    use super::*;
+    use std::collections::VecDeque;
+    #[derive(Default)]
+    struct Backend {
+        observations: VecDeque<Option<SessionObservation>>,
+        actions: Vec<&'static str>,
+        reject_display: bool,
+        reject_heartbeat: bool,
+        reject_recovery: bool,
+    }
+    impl SessionBackend for Backend {
+        fn observe(&mut self) -> Option<SessionObservation> {
+            self.observations
+                .pop_front()
+                .expect("unexpected observation")
+        }
+        fn prepare(&mut self) -> bool {
+            self.actions.push("prepare");
+            true
+        }
+        fn keep_alive(&mut self, _: [u8; 16]) -> bool {
+            self.actions.push("heartbeat");
+            !self.reject_heartbeat
+        }
+        fn display(&mut self, _: [u8; 16]) -> bool {
+            self.actions.push("display");
+            !self.reject_display
+        }
+        fn recover(&mut self, _: [u8; 16], manual: bool) -> bool {
+            self.actions.push(if manual { "manual" } else { "restore" });
+            !self.reject_recovery
+        }
+    }
+    fn observed(active: bool, lid: i8) -> SessionObservation {
+        SessionObservation {
+            boot: [1; 16],
+            id: [2; 16],
+            now: 100.,
+            deadline: f64::NAN,
+            expires: f64::NAN,
+            temp: 40.,
+            battery: 90.,
+            ac: 0,
+            thermal: 0,
+            lid,
+            power: active as i8,
+            has_session: active,
+            selected: true,
+            active_user: true,
+            permitted: true,
+            ..Default::default()
+        }
+    }
+    type Model = SessionDriver<Backend>;
+    fn tick(m: &mut Model, o: SessionObservation) {
+        m.backend.observations.push_back(Some(o));
+        m.poll(&AtomicBool::new(true));
+    }
+    #[test]
+    fn opening_a_lid_rearms_one_display_request_per_closure_even_after_failure() {
+        for fail in [true, false] {
+            let mut m = Model::default();
+            m.backend.reject_display = fail;
+            for lid in [0, 1, 1, 1, 0, 1, 1] {
+                tick(&mut m, observed(true, lid));
+            }
+            assert_eq!(
+                m.backend
+                    .actions
+                    .iter()
+                    .filter(|&&v| v == "display")
+                    .count(),
+                2
+            );
+            assert_eq!(m.status.error.is_some(), fail);
+            assert!(!m.can_exit());
+        }
+    }
+    #[test]
+    fn prepare_reobserves_and_adoption_never_restarts_the_timer() {
+        let mut m = Model::default();
+        m.backend.observations.push_back(Some(observed(false, 0)));
+        let finite = || SessionObservation {
+            expires: 4000.,
+            deadline: wall().floor() + 3900.,
+            ..observed(true, 0)
+        };
+        let first = finite();
+        let deadline = first.deadline;
+        m.backend.observations.push_back(Some(first));
+        m.poll(&AtomicBool::new(true));
+        assert_eq!(m.backend.actions, ["prepare"]);
+        assert_eq!(m.status.deadline, Some(deadline));
+        tick(
+            &mut m,
+            SessionObservation {
+                expires: 4000.,
+                deadline,
+                ..observed(true, 1)
+            },
+        );
+        assert_eq!(m.status.deadline, Some(deadline));
+        assert_eq!(m.backend.actions, ["prepare", "heartbeat", "display"]);
+    }
+    #[test]
+    fn missing_response_foreign_replacement_and_lost_journal_never_clear_owned_session() {
+        for cause in [
+            "transport",
+            "foreign",
+            "replaced",
+            "missing",
+            "boot",
+            "unknown",
+        ] {
+            let mut m = Model::default();
+            tick(&mut m, observed(true, 0));
+            m.backend.actions.clear();
+            let mut o = observed(true, 0);
+            match cause {
+                "transport" => m.backend.observations.push_back(None),
+                _ => {
+                    match cause {
+                        "foreign" => o.foreign_owner = true,
+                        "replaced" => o.id = [7; 16],
+                        "missing" => o.has_session = false,
+                        "boot" => o.boot = [9; 16],
+                        "unknown" => {
+                            o.has_session = false;
+                            o.power = -1;
+                        }
+                        _ => unreachable!(),
+                    }
+                    m.backend.observations.push_back(Some(o));
+                }
+            }
+            m.poll(&AtomicBool::new(true));
+            assert!(!m.can_exit(), "{cause}");
+            assert!(m.backend.actions.is_empty(), "{cause}");
+        }
+    }
+    #[test]
+    fn cancellation_or_unconfirmed_recovery_cannot_report_completion() {
+        for fault in [
+            "failed",
+            "noReply",
+            "stillDisabled",
+            "newBoot",
+            "stillOwned",
+            "foreign",
+            "confirmed",
+        ] {
+            let mut m = Model::default();
+            tick(&mut m, observed(true, 0));
+            m.backend.actions.clear();
+            m.backend.observations.push_back(Some(observed(true, 0)));
+            let mut after = observed(false, 0);
+            match fault {
+                "failed" => m.backend.reject_recovery = true,
+                "noReply" => m.backend.observations.push_back(None),
+                _ => {
+                    match fault {
+                        "stillDisabled" => after.power = 1,
+                        "newBoot" => after.boot = [8; 16],
+                        "stillOwned" => after.has_session = true,
+                        "foreign" => after.foreign_owner = true,
+                        _ => {}
+                    }
+                    m.backend.observations.push_back(Some(after));
+                }
+            }
+            m.manual(&AtomicBool::new(false));
+            assert_eq!(m.backend.actions, ["manual"]);
+            assert_eq!(m.can_exit(), fault == "confirmed", "{fault}");
+        }
+    }
+    #[test]
+    fn threshold_crossing_and_loss_of_sensors_request_recovery_then_confirm() {
+        for case in [
+            "battery",
+            "thermal",
+            "temp",
+            "unavailable",
+            "disabled",
+            "logout",
+            "expired",
+            "unknownLid",
+            "recoveryOnly",
+        ] {
+            let mut m = Model::default();
+            let mut o = observed(true, 1);
+            match case {
+                "battery" => o.battery = 10.,
+                "thermal" => o.thermal = 1,
+                "temp" => o.temp = 95.,
+                "unavailable" => o.temp = f64::NAN,
+                "disabled" => o.permitted = false,
+                "logout" => o.active_user = false,
+                "expired" => {
+                    o.expires = 99.;
+                    o.deadline = 1.;
+                }
+                "unknownLid" => o.lid = -1,
+                "recoveryOnly" => o.recovery_only = true,
+                _ => unreachable!(),
+            }
+            m.backend
+                .observations
+                .extend([Some(o), Some(observed(false, 0))]);
+            m.poll(&AtomicBool::new(true));
+            assert_eq!(m.backend.actions, ["restore"], "{case}");
+            assert!(m.can_exit());
+        }
+    }
+    #[test]
+    fn expired_session_does_not_immediately_rearm_after_ordinary_sleep() {
+        let mut m = Model::default();
+        tick(&mut m, observed(true, 0));
+        tick(&mut m, observed(false, 0));
+        m.backend.actions.clear();
+        m.poll(&AtomicBool::new(true));
+        assert!(m.backend.actions.is_empty());
+        assert!(m.status.finished);
+        m.new_intent();
+        m.backend
+            .observations
+            .extend([Some(observed(false, 0)), Some(observed(true, 0))]);
+        m.poll(&AtomicBool::new(true));
+        assert_eq!(m.backend.actions, ["prepare"]);
     }
 }

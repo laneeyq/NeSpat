@@ -173,3 +173,85 @@ mod tests {
         assert_eq!(uuid_text(&uuid(&text.to_lowercase()).unwrap()), text);
     }
 }
+
+#[cfg(test)]
+mod regression {
+    use super::*;
+    #[test]
+    fn every_operation_has_only_its_version_one_argument_shapes() {
+        for op in 0..=8 {
+            for session in [false, true] {
+                for minutes in [false, true] {
+                    for sequence in [false, true] {
+                        let r = Request {
+                            id: [1; 16],
+                            session: [2; 16],
+                            operation: op,
+                            has_session: session,
+                            has_minutes: minutes,
+                            minutes: 60,
+                            has_sequence: sequence,
+                            sequence: 1,
+                        };
+                        let valid = match op {
+                            0 | 5 => !session && !minutes,
+                            1 => !session,
+                            2 => session,
+                            3 | 4 | 6 | 7 => session && !minutes,
+                            _ => false,
+                        } && (!sequence || op == 6);
+                        assert_eq!(nespat_valid_request(&r), valid);
+                        let encoded = nespat_encode_request(&r);
+                        if !valid {
+                            assert!(encoded.is_null());
+                            continue;
+                        }
+                        let encoded = unsafe { CFData::wrap_under_create_rule(encoded) };
+                        let parsed = decode(encoded.bytes()).unwrap();
+                        assert_eq!(parsed.operation, r.operation);
+                        assert_eq!(parsed.has_minutes, minutes);
+                        assert_eq!(parsed.has_sequence, sequence);
+                        assert_eq!(parsed.id, r.id);
+                        if session {
+                            assert_eq!(parsed.session, r.session);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn unknown_fields_identity_claims_and_malformed_numbers_are_rejected() {
+        let q = json!({"id":uuid_text(&[1;16]),"operation":"begin","version":1});
+        for field in [
+            "command",
+            "path",
+            "arguments",
+            "uid",
+            "pid",
+            "auditSession",
+            "codeIdentity",
+            "timeout",
+            "expires",
+            "bootID",
+        ] {
+            let mut value = q.clone();
+            value[field] = json!(1);
+            assert!(decode(&serde_json::to_vec(&value).unwrap()).is_none());
+        }
+        for v in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!(false),
+            json!("60"),
+            Value::Null,
+            json!(i64::MAX),
+        ] {
+            let mut value = q.clone();
+            value["minutes"] = v;
+            assert!(decode(&serde_json::to_vec(&value).unwrap()).is_none());
+        }
+        assert!(decode(&vec![b' '; 4097]).is_none());
+    }
+}

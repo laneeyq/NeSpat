@@ -56,7 +56,35 @@ impl Store {
             }
         }
     }
+    fn lock_is_current(&self) -> bool {
+        let dir = self.directory.as_raw_fd();
+        let lock = self.lock.as_raw_fd();
+        if !nespat_journal_check(dir, true, self.uid)
+            || !nespat_journal_check(lock, false, self.uid)
+        {
+            return false;
+        }
+        let mut named = std::mem::MaybeUninit::uninit();
+        let mut held = std::mem::MaybeUninit::uninit();
+        unsafe {
+            if libc::fstatat(
+                dir,
+                c"lock".as_ptr(),
+                named.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            ) != 0
+                || libc::fstat(lock, held.as_mut_ptr()) != 0
+            {
+                return false;
+            }
+            let (named, held) = (named.assume_init(), held.assume_init());
+            named.st_dev == held.st_dev && named.st_ino == held.st_ino
+        }
+    }
     fn read(&self) -> Option<(Vec<u8>, Envelope)> {
+        if !self.lock_is_current() {
+            return None;
+        }
         let mut b = [0u8; 8193];
         let n = unsafe {
             nespat_journal_read(
@@ -84,16 +112,10 @@ impl Store {
             }
         }
         let lock = self.lock.as_raw_fd();
-        let dir = self.directory.as_raw_fd();
         if unsafe { libc::flock(lock, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return None;
         }
         let _guard = Lock(lock);
-        if !nespat_journal_check(dir, true, self.uid)
-            || !nespat_journal_check(lock, false, self.uid)
-        {
-            return None;
-        }
         let (payload, envelope) = self.read()?;
         body(&mut Transaction {
             store: self,
@@ -144,5 +166,125 @@ impl Transaction<'_> {
         }
         next.retry = Some(retry);
         self.save(next)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        os::unix::fs::{symlink, PermissionsExt},
+    };
+    #[test]
+    fn malformed_missing_or_unsafe_journal_cannot_enter_a_transaction() {
+        for invalid in [
+            "missing",
+            "empty",
+            "corrupt",
+            "wrong_version",
+            "oversized",
+            "mode",
+            "hardlink",
+            "symlink",
+            "fifo",
+            "acl",
+        ] {
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = Store::fixture(folder.path());
+            let file = folder.path().join("authority.json");
+            match invalid {
+                "missing" => fs::remove_file(&file).unwrap(),
+                "empty" => fs::write(&file, b"").unwrap(),
+                "corrupt" => fs::write(&file, b"{}").unwrap(),
+                "wrong_version" => fs::write(
+                    &file,
+                    journal::integrity(br#"{"generation":1,"version":99}"#),
+                )
+                .unwrap(),
+                "oversized" => fs::write(&file, vec![0; 8193]).unwrap(),
+                "mode" => fs::set_permissions(&file, PermissionsExt::from_mode(0o644)).unwrap(),
+                "hardlink" => fs::hard_link(&file, folder.path().join("other")).unwrap(),
+                "symlink" => {
+                    let other = folder.path().join("actual");
+                    fs::rename(&file, &other).unwrap();
+                    symlink(other, &file).unwrap();
+                }
+                "fifo" => {
+                    fs::remove_file(&file).unwrap();
+                    assert!(std::process::Command::new("/usr/bin/mkfifo")
+                        .arg(&file)
+                        .status()
+                        .unwrap()
+                        .success());
+                }
+                "acl" => assert!(std::process::Command::new("/bin/chmod")
+                    .args(["+a", "everyone allow read"])
+                    .arg(&file)
+                    .status()
+                    .unwrap()
+                    .success()),
+                _ => unreachable!(),
+            }
+            assert!(store
+                .transaction::<()>(|_| panic!("accepted {invalid}"))
+                .is_none());
+        }
+    }
+    #[test]
+    fn store_rejects_changed_directory_and_lock_permissions() {
+        for item in ["lock", "."] {
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = Store::fixture(folder.path());
+            fs::set_permissions(folder.path().join(item), PermissionsExt::from_mode(0o777))
+                .unwrap();
+            assert!(store
+                .transaction::<()>(|_| panic!("writable {item}"))
+                .is_none());
+        }
+    }
+    #[test]
+    fn lock_contention_and_uncommitted_changes_do_not_overwrite_state() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut a = Store::fixture(folder.path());
+        let mut b = Store::fixture(folder.path());
+        let file = folder.path().join("authority.json");
+        a.transaction(|t| {
+            assert!(b
+                .transaction::<()>(|_| panic!("parallel transaction"))
+                .is_none());
+            fs::write(&file, b"changed").unwrap();
+            assert!(!t.intact());
+            assert!(t.replace(None).is_none());
+            Some(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(file).unwrap(), b"changed");
+    }
+    #[test]
+    fn lock_must_still_be_the_named_lock_before_and_during_transaction() {
+        for before in [true, false] {
+            let folder = tempfile::tempdir().unwrap();
+            let mut store = Store::fixture(folder.path());
+            let lock = folder.path().join("lock");
+            let replace = || {
+                fs::rename(&lock, folder.path().join("previous")).unwrap();
+                fs::write(&lock, b"").unwrap();
+                fs::set_permissions(&lock, PermissionsExt::from_mode(0o600)).unwrap();
+            };
+            if before {
+                replace();
+                assert!(store.transaction::<()>(|_| panic!("stale lock")).is_none());
+            } else {
+                store
+                    .transaction(|t| {
+                        replace();
+                        assert!(!t.intact());
+                        assert!(t.replace(None).is_none());
+                        Some(())
+                    })
+                    .unwrap();
+            }
+        }
     }
 }

@@ -104,3 +104,47 @@ pub extern "C" fn nespat_transport_reserve(
     t.phase = Phase::Active;
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn work_requires_one_verified_root_peer_and_close_is_terminal() {
+        for (pid, uid) in [(0, 0), (-1, 0), (123, 501)] {
+            let mut t = Transport::default();
+            assert!(!nespat_transport_verify(&mut t, 123, 0));
+            assert!(nespat_transport_start(&mut t));
+            assert!(!nespat_transport_start(&mut t));
+            assert!(!nespat_transport_verify(&mut t, pid, uid));
+            assert!(!nespat_transport_reserve(&mut t, &[1; 16], false, 0));
+            assert!(nespat_transport_verify(&mut t, 123, 0));
+            assert!(!nespat_transport_verify(&mut t, 124, 0));
+            assert!(nespat_transport_reserve(&mut t, &[1; 16], false, 0));
+            assert!(!nespat_transport_reserve(&mut t, &[1; 16], false, 0));
+            assert!(nespat_transport_peer(&t, 123, 0));
+            assert!(!nespat_transport_peer(&t, 124, 0));
+            assert!(!nespat_transport_peer(&t, 123, 501));
+            nespat_transport_close(&mut t);
+            assert!(!nespat_transport_start(&mut t));
+            assert!(!nespat_transport_verify(&mut t, 123, 0));
+            assert!(!nespat_transport_peer(&t, 123, 0));
+            assert!(!nespat_transport_reserve(&mut t, &[2; 16], false, 0));
+        }
+    }
+    #[test]
+    fn timeouts_and_stream_sequence_have_strict_boundaries() {
+        let mut t = Transport::default();
+        for timeout in [0., -1., f64::NAN, f64::INFINITY, 61.] {
+            assert!(!nespat_transport_arm(&mut t, 1., timeout));
+        }
+        assert!(nespat_transport_arm(&mut t, 1., 2.));
+        assert!(nespat_transport_timely(&t, 2.999));
+        assert!(!nespat_transport_timely(&t, 3.));
+        assert!(!nespat_transport_timely(&t, f64::NAN));
+        nespat_transport_start(&mut t);
+        nespat_transport_verify(&mut t, 123, 0);
+        for (n, ok) in [(0, false), (1, true), (1, false), (3, true), (2, false)] {
+            assert_eq!(nespat_transport_reserve(&mut t, &[1; 16], true, n), ok);
+        }
+    }
+}

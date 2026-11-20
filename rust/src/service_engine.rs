@@ -345,13 +345,17 @@ impl State {
         r.proof(p.setup, p.uid(), &h.client, p.selected(), p.maximum())?;
         tx.replace(Some(r.clone()))?;
         self.remembered = Some(r.clone());
+        let within_lifetime = || {
+            let at = clock();
+            !g.expired(at)
+                && at >= now
+                && at < g.until
+                && expires.is_none_or(|e| at < e)
+                && end.is_none_or(|e| wall() < e)
+        };
         let permitted = || {
             let (risk, ac) = h.safety(true);
-            risk == 0
-                && p.permits_source(ac)
-                && h.can_arm()
-                && clock() < g.until
-                && end.is_none_or(|t| wall() < t)
+            risk == 0 && p.permits_source(ac) && h.can_arm() && within_lifetime()
         };
         if !tx.intact() || !permitted() {
             return None;
@@ -372,7 +376,7 @@ impl State {
             }
             _ => return None,
         }
-        if power() != 1 || !tx.intact() || clock() >= g.until || end.is_some_and(|e| wall() >= e) {
+        if power() != 1 || !tx.intact() || !within_lifetime() {
             return None;
         }
         r.phase = Phase::Active;
@@ -626,6 +630,10 @@ mod tests {
     }
     impl Fixture {
         fn new() -> Self {
+            crate::service_platform::SETTER_HOOK.set(None);
+            crate::service_platform::WALL.set(1000.);
+            crate::service_platform::PULSE.set(None);
+            crate::service_platform::IDLE.set(true);
             TIME.set(100.);
             POWER.set(0);
             SAFETY.set((0, 1));
@@ -797,4 +805,5 @@ mod tests {
             .is_none());
         assert_eq!(SETTERS.get(), 1);
     }
+    mod regression;
 }

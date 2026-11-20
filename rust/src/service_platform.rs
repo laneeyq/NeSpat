@@ -13,6 +13,10 @@ mod fake {
     use crate::{profile::Profile, setter::SetterResult};
     use std::cell::Cell;
     thread_local! {
+        pub static SETTER_HOOK:Cell<Option<fn(bool)->SetterResult>>=const{Cell::new(None)};
+        pub static PULSE:Cell<Option<[u8;16]>>=const{Cell::new(None)};
+        pub static WALL:Cell<f64>=const{Cell::new(1000.)};
+        pub static IDLE:Cell<bool>=const{Cell::new(true)};
         pub static TIME:Cell<f64>=const{Cell::new(100.)};
         pub static POWER:Cell<i8>=const{Cell::new(0)};
         pub static SAFETY:Cell<(u8,i8)>=const{Cell::new((0,1))};
@@ -30,10 +34,13 @@ mod fake {
         ARM.get()
     }
     pub fn idle() -> bool {
-        true
+        IDLE.get()
     }
     pub fn nespat_set_power(disabled: bool) -> SetterResult {
         SETTERS.set(SETTERS.get() + 1);
+        if let Some(set) = SETTER_HOOK.get() {
+            return set(disabled);
+        }
         POWER.set(disabled as i8);
         SetterResult::Confirmed
     }

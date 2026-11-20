@@ -42,6 +42,19 @@ fn host(argv0: &str, watchdog: bool) -> Option<Host> {
         watchdog,
     })
 }
+fn verify_removal(
+    enabled: bool,
+    store: &mut Store,
+    sleep: impl FnOnce() -> i8,
+    idle: impl FnOnce() -> bool,
+) -> Option<()> {
+    if enabled {
+        return None;
+    }
+    store.transaction(|tx| {
+        (tx.state().record.is_none() && sleep() == 0 && idle() && tx.intact()).then_some(())
+    })
+}
 pub fn run(args: &[String]) -> Option<i32> {
     let cmd = args.get(1)?.as_str();
     if !matches!(
@@ -111,15 +124,12 @@ pub fn run(args: &[String]) -> Option<i32> {
             std::thread::sleep(std::time::Duration::from_secs(1));
         },
         ("--check-removable", 2) => {
-            if nespat_profile_enabled(&h.profile) {
-                return None;
-            }
-            store.transaction(|t| {
-                (t.state().record.is_none() && nespat_sleep_disabled() == 0).then_some(())
-            })?;
-            if !nespat_setter_idle() {
-                return None;
-            }
+            verify_removal(
+                nespat_profile_enabled(&h.profile),
+                &mut store,
+                || nespat_sleep_disabled(),
+                || nespat_setter_idle(),
+            )?;
             println!("ordinary sleep confirmed; no recovery obligation; setter idle");
             Some(0)
         }
@@ -140,5 +150,50 @@ pub fn run(args: &[String]) -> Option<i32> {
             Some(0)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod regression {
+    use super::*;
+    #[test]
+    fn removal_requires_disabled_profile_confirmed_sleep_and_idle_setter() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::fixture(dir.path());
+        for enabled in [false, true] {
+            for sleep in [-1, 0, 1] {
+                for idle in [false, true] {
+                    assert_eq!(
+                        verify_removal(enabled, &mut store, || sleep, || idle).is_some(),
+                        !enabled && sleep == 0 && idle
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn command_line_does_not_grant_service_authority() {
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "requires ordinary-user test runner"
+        );
+        for cmd in [
+            "--serve-local",
+            "--watch-exclusive",
+            "--check-local",
+            "--check-removable",
+            "--approved-recovery",
+            "--unknown",
+        ] {
+            let mut args = vec![HELPER.to_owned(), cmd.to_owned()];
+            if cmd == "--approved-recovery" {
+                args.extend([
+                    "00000000-0000-0000-0000-000000000000".into(),
+                    "0".repeat(64),
+                ]);
+            }
+            assert_eq!(run(&args), None);
+        }
     }
 }

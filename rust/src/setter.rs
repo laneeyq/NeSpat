@@ -186,3 +186,30 @@ pub extern "C" fn nespat_set_power(disabled: bool) -> SetterResult {
         SetterResult::Unconfirmed
     }
 }
+
+#[cfg(test)]
+mod regression {
+    use super::*;
+    #[test]
+    fn child_holds_same_open_lock_description_until_it_exits() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("lock");
+        let f = File::create(&path).unwrap();
+        let other = File::open(&path).unwrap();
+        let take =
+            |f: &File| unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) == 0 };
+        assert!(take(&f));
+        let input = f.try_clone().unwrap();
+        let mut child = Command::new("/bin/sleep")
+            .arg("2")
+            .stdin(Stdio::from(input))
+            .spawn()
+            .unwrap();
+        drop(f);
+        let blocked = !take(&other);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(blocked);
+        assert!(take(&other));
+    }
+}

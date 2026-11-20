@@ -13,6 +13,11 @@ use crate::{
 };
 use objc2_foundation::NSProcessInfo;
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+pub(crate) fn wall() -> f64 {
+    crate::service_platform::WALL.get()
+}
+#[cfg(not(test))]
 pub(crate) fn wall() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -226,6 +231,12 @@ pub(crate) fn reconcile(
     }
     let time = clock();
     if !time.is_finite() || time < proof.issued {
+        if let Some(mut retry) = tx.state().retry.clone() {
+            if !retry.clock_fault {
+                retry.clock_fault = true;
+                tx.retry(retry)?;
+            }
+        }
         return None;
     }
     let (assessment, ac) = h.safety(false);
@@ -236,7 +247,11 @@ pub(crate) fn reconcile(
     let helper = if approval.is_some() {
         None
     } else {
-        pulse::latest(h.boot, p.setup, false)
+        #[cfg(test)]
+        let epoch = crate::service_platform::PULSE.get();
+        #[cfg(not(test))]
+        let epoch = pulse::latest(h.boot, p.setup, false);
+        epoch
     };
     if tx.state().retry.is_none()
         && !emergency

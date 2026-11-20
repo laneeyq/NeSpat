@@ -168,6 +168,16 @@ fn as_user(uid: u32, cmd: &str, args: &[&str]) -> Result<()> {
 fn uninstaller() -> PathBuf {
     Path::new(BASE).join("Uninstall")
 }
+fn stop_for_removal(
+    mut confirm: impl FnMut() -> Result<()>,
+    mut stop: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    for label in LABELS.iter().rev() {
+        confirm()?;
+        stop(label)?;
+    }
+    confirm()
+}
 fn uninstall(resources: &Path) -> Result<()> {
     let _lock = lock()?;
     let base = Path::new(BASE);
@@ -186,13 +196,15 @@ fn uninstall(resources: &Path) -> Result<()> {
     }
     profile["enabled"] = false.into();
     write(&p, &serde_json::to_vec(&profile)?, 0o644)?;
-    for label in LABELS.iter().rev() {
-        check_helper("--check-removable")?;
-        if loaded(label) {
-            command("/bin/launchctl", &["bootout", &format!("system/{label}")])?;
-        }
-    }
-    check_helper("--check-removable")?;
+    stop_for_removal(
+        || check_helper("--check-removable"),
+        |label| {
+            if loaded(label) {
+                command("/bin/launchctl", &["bootout", &format!("system/{label}")])?;
+            }
+            Ok(())
+        },
+    )?;
     for label in LABELS {
         let p = daemon(label);
         if p.try_exists()? {
@@ -389,5 +401,88 @@ fn main() {
     if let Err(e) = run() {
         eprintln!("NeSpat: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn removal_rechecks_before_each_service_stop_and_before_deletion() {
+        use std::cell::RefCell;
+        let steps = ["confirm", LABELS[1], "confirm", LABELS[0], "confirm"];
+        for fail_at in 0..=steps.len() {
+            let calls = RefCell::new(Vec::new());
+            let record = |action: &str| -> Result<()> {
+                let mut calls = calls.borrow_mut();
+                calls.push(action.to_owned());
+                if calls.len() == fail_at + 1 {
+                    Err("simulated failure".into())
+                } else {
+                    Ok(())
+                }
+            };
+            assert_eq!(
+                stop_for_removal(|| record("confirm"), record).is_ok(),
+                fail_at == steps.len()
+            );
+            assert_eq!(calls.into_inner(), steps[..(fail_at + 1).min(steps.len())]);
+        }
+    }
+    #[test]
+    fn launchd_has_one_fixed_command_per_role_and_only_helper_accepts_xpc() {
+        for label in LABELS {
+            let d = spec(label).unwrap();
+            let d = d.as_dictionary().unwrap();
+            assert_eq!(d["Label"].as_string(), Some(label));
+            for key in ["KeepAlive", "RunAtLoad"] {
+                assert_eq!(d[key].as_boolean(), Some(true));
+            }
+            let args = d["ProgramArguments"].as_array().unwrap();
+            assert_eq!(args.len(), 2);
+            assert_eq!(
+                args[0].as_string(),
+                Some(format!("{APP}/{HELPER_REL}").as_str())
+            );
+            if label == LABELS[0] {
+                assert_eq!(args[1].as_string(), Some("--watch-exclusive"));
+                assert!(!d.contains_key("MachServices"));
+            } else {
+                assert_eq!(args[1].as_string(), Some("--serve-local"));
+                assert_eq!(
+                    d["MachServices"].as_dictionary().unwrap()[label].as_boolean(),
+                    Some(true)
+                );
+            }
+        }
+    }
+    #[test]
+    fn invalid_pins_or_unsigned_payload_do_not_pass_verification() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let info = root.join("pins.json");
+        for value in [
+            Value::Null,
+            serde_json::json!({}),
+            serde_json::json!({"guiHash":"invalid"}),
+            serde_json::json!({"guiHash":"0".repeat(40),"helperHash":"1".repeat(40)}),
+        ] {
+            fs::write(&info, serde_json::to_vec(&value).unwrap()).unwrap();
+            assert!(verify(root, root).is_err());
+        }
+    }
+    #[test]
+    fn exclusive_publication_preserves_other_files_and_atomic_write_uses_requested_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("new");
+        let b = tmp.path().join("existing");
+        write(&a, b"new", 0o600).unwrap();
+        write(&b, b"keep", 0o600).unwrap();
+        assert!(publish(&a, &b).is_err());
+        assert_eq!(fs::read(&b).unwrap(), b"keep");
+        let c = tmp.path().join("destination");
+        publish(&a, &c).unwrap();
+        assert_eq!(fs::read(&c).unwrap(), b"new");
+        assert_eq!(fs::metadata(&c).unwrap().mode() & 0o777, 0o600);
     }
 }

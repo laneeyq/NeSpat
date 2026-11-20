@@ -25,6 +25,11 @@ use std::{
 };
 type Shared = Arc<Mutex<Server>>;
 type Reply = Block<dyn Fn(*const NSData)>;
+struct ListenerState {
+    server: Shared,
+    #[cfg(test)]
+    allow_test_executable: bool,
+}
 struct Dispatch {
     closed: bool,
     peer: Option<Peer>,
@@ -32,6 +37,8 @@ struct Dispatch {
 }
 struct Endpoint {
     connection: usize,
+    #[cfg(test)]
+    allow_test_executable: bool,
     server: Shared,
     uid: u32,
     pin: String,
@@ -56,11 +63,14 @@ fn denied_or_reply(out: Option<Vec<u8>>, callback: &Reply) {
 impl Endpoint {
     fn peer(&self) -> Option<Peer> {
         let c = NSXPCConnection::currentConnection()?;
-        #[cfg(not(test))]
         let path_uid = self.uid;
         // The anonymous XPC test runs its signed peer from Cargo's test directory.
         #[cfg(test)]
-        let path_uid = 0;
+        let path_uid = if self.allow_test_executable {
+            0
+        } else {
+            path_uid
+        };
         if Retained::as_ptr(&c) as usize != self.connection
             || !xpc::nespat_xpc_current_client(&c, path_uid)
         {
@@ -156,7 +166,7 @@ define_class!(
 );
 define_class!(
     #[unsafe(super=NSObject)]
-    #[ivars=Shared]
+    #[ivars=ListenerState]
     struct NeSpatServiceListener;
     unsafe impl NSObjectProtocol for NeSpatServiceListener {}
     unsafe impl NSXPCListenerDelegate for NeSpatServiceListener {
@@ -170,7 +180,8 @@ define_class!(
         }
     }
 );
-fn accept(shared: &Shared, c: &NSXPCConnection) -> bool {
+fn accept(state: &ListenerState, c: &NSXPCConnection) -> bool {
+    let shared = &state.server;
     let Ok(s) = shared.lock() else {
         return false;
     };
@@ -183,6 +194,8 @@ fn accept(shared: &Shared, c: &NSXPCConnection) -> bool {
         return false;
     }
     let endpoint = Arc::new(Endpoint {
+        #[cfg(test)]
+        allow_test_executable: state.allow_test_executable,
         connection: c as *const _ as usize,
         server: shared.clone(),
         uid,
@@ -212,7 +225,11 @@ pub(crate) fn run(server: Server) -> Option<i32> {
     let epoch = server.host.epoch;
     let pin = NSString::from_str(&server.host.client);
     let server = Arc::new(Mutex::new(server));
-    let target = NeSpatServiceListener::alloc().set_ivars(server.clone());
+    let target = NeSpatServiceListener::alloc().set_ivars(ListenerState {
+        server: server.clone(),
+        #[cfg(test)]
+        allow_test_executable: false,
+    });
     let target: Retained<NeSpatServiceListener> = unsafe { msg_send![super(target), init] };
     let listener = NSXPCListener::initWithMachServiceName(
         NSXPCListener::alloc(),
@@ -279,10 +296,19 @@ mod tests {
                 let _: () = msg_send![&*obj,request:&*data,reply:&*reply];
             }
         }
-        rx.recv_timeout(Duration::from_secs(4)).ok()?
+        rx.recv_timeout(Duration::from_secs(4))
+            .expect("XPC must return a reply or a transport error")
     }
-    #[test]
-    fn native_listener_serves_correlated_status_on_kernel_authenticated_local_channel() {
+    fn channel(
+        client_matches: bool,
+        server_matches: bool,
+        allow_test_executable: bool,
+    ) -> (
+        tempfile::TempDir,
+        Retained<NeSpatServiceListener>,
+        Retained<NSXPCListener>,
+        Retained<NSXPCConnection>,
+    ) {
         let path = std::env::current_exe().unwrap();
         let output = std::process::Command::new("/usr/bin/codesign")
             .args(["-dv", "--verbose=4"])
@@ -295,27 +321,133 @@ mod tests {
             .find_map(|s| s.strip_prefix("CDHash="))
             .unwrap();
         assert_eq!(hash.len(), 40);
-        let requirement = format!("cdhash H\"{hash}\"");
-        let pin = NSString::from_str(&requirement);
+        let id = notes
+            .lines()
+            .find_map(|s| s.strip_prefix("Identifier="))
+            .unwrap();
+        let requirement = |matches| {
+            crate::signing::pin(
+                if matches {
+                    hash
+                } else {
+                    "0000000000000000000000000000000000000000"
+                },
+                id,
+            )
+            .unwrap()
+        };
+        let pin = NSString::from_str(&requirement(client_matches));
         let folder = tempfile::tempdir().unwrap();
         let uid = unsafe { libc::getuid() };
         let host = Host {
             profile: Profile::fixture(uid),
-            client: requirement,
+            client: requirement(client_matches),
             boot: crate::host::boot().unwrap(),
             epoch: new_id(),
             watchdog: false,
         };
         let state = Arc::new(Mutex::new(Server::new(host, Store::fixture(folder.path()))));
-        let target = NeSpatServiceListener::alloc().set_ivars(state);
+        let target = NeSpatServiceListener::alloc().set_ivars(ListenerState {
+            server: state,
+            allow_test_executable,
+        });
         let target: Retained<NeSpatServiceListener> = unsafe { msg_send![super(target), init] };
         let listener = NSXPCListener::anonymousListener();
         listener.setConnectionCodeSigningRequirement(&pin);
         listener.setDelegate(Some(ProtocolObject::from_ref(&*target)));
         listener.activate();
         let endpoint = listener.endpoint();
-        let conn = unsafe { Retained::from_raw(xpc::nespat_xpc_open(&pin, &*endpoint)) }.unwrap();
+        let conn = unsafe {
+            Retained::from_raw(xpc::nespat_xpc_open(
+                &NSString::from_str(&requirement(server_matches)),
+                &*endpoint,
+            ))
+        }
+        .unwrap();
         conn.activate();
+        (folder, target, listener, conn)
+    }
+    #[test]
+    fn native_xpc_rejects_each_mismatched_pin_before_any_application_reply() {
+        for (client, server) in [(false, true), (true, false)] {
+            let (_folder, _target, listener, conn) = channel(client, server, true);
+            let hello = wire::Hello {
+                epoch: new_id(),
+                nonce: new_id(),
+            };
+            assert_eq!(
+                exchange(
+                    &conn,
+                    bytes(wire::nespat_hello(&hello, false)).unwrap(),
+                    true
+                ),
+                None
+            );
+            conn.invalidate();
+            listener.invalidate();
+        }
+    }
+    #[test]
+    fn correctly_signed_copy_outside_the_installed_location_gets_no_handshake() {
+        let (_folder, _target, listener, conn) = channel(true, true, false);
+        let hello = wire::Hello {
+            epoch: new_id(),
+            nonce: new_id(),
+        };
+        let denial = exchange(
+            &conn,
+            bytes(wire::nespat_hello(&hello, false)).unwrap(),
+            true,
+        );
+        assert_eq!(
+            denial.as_deref(),
+            Some(br#"{"error":"denied-or-unconfirmed"}"#.as_slice())
+        );
+        conn.invalidate();
+        listener.invalidate();
+    }
+    #[test]
+    fn operations_before_hello_duplicate_hello_and_wrong_epoch_close_the_channel() {
+        for invalid in ["before", "duplicate", "epoch"] {
+            let (_folder, _target, listener, conn) = channel(true, true, true);
+            let h = wire::Hello {
+                epoch: new_id(),
+                nonce: new_id(),
+            };
+            let hello = || bytes(wire::nespat_hello(&h, false)).unwrap();
+            if invalid != "before" {
+                assert!(wire::read_hello(&exchange(&conn, hello(), true).unwrap(), true).is_some());
+            }
+            let q = Request {
+                id: new_id(),
+                operation: 0,
+                ..Default::default()
+            };
+            let raw = bytes(nespat_encode_request(&q)).unwrap();
+            let epoch = if invalid == "epoch" {
+                new_id()
+            } else {
+                h.epoch
+            };
+            let denied = if invalid == "duplicate" {
+                exchange(&conn, hello(), true)
+            } else {
+                exchange(
+                    &conn,
+                    bytes(wire::operation(&raw, &epoch, false).unwrap()).unwrap(),
+                    false,
+                )
+            };
+            let expected = Some(br#"{"error":"denied-or-unconfirmed"}"#.as_slice());
+            assert_eq!(denied.as_deref(), expected);
+            assert_eq!(exchange(&conn, hello(), true).as_deref(), expected);
+            conn.invalidate();
+            listener.invalidate();
+        }
+    }
+    #[test]
+    fn native_listener_serves_correlated_status_on_kernel_authenticated_local_channel() {
+        let (_folder, _target, listener, conn) = channel(true, true, true);
         let h = wire::Hello {
             epoch: new_id(),
             nonce: new_id(),

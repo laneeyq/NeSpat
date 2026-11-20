@@ -139,3 +139,40 @@ pub extern "C" fn nespat_deadline(start: f64, seconds: f64) -> f64 {
     }
     end
 }
+
+#[cfg(test)]
+mod regression {
+    use super::*;
+    #[test]
+    fn exact_thresholds_and_invalid_readings_are_not_based_on_display_rounding() {
+        for start in [true, false] {
+            for ac in [0, 1] {
+                for (temp, expected) in [
+                    (0., Assessment::Unknown),
+                    (94.999, Assessment::Clear),
+                    (95., Assessment::Hot),
+                    (149.99, Assessment::Hot),
+                    (150., Assessment::Unknown),
+                    (f64::NAN, Assessment::Unknown),
+                ] {
+                    assert_eq!(classify(90., ac, temp, 0, start), expected);
+                }
+                for n in [f64::NAN, -0.01, 100.01, f64::INFINITY] {
+                    assert_eq!(classify(n, ac, 30., 0, start), Assessment::Unknown);
+                }
+            }
+        }
+        for (b, expected_start, expected_active) in [
+            (10., Assessment::LowAtStart, Assessment::LowDuringSession),
+            (10.01, Assessment::LowAtStart, Assessment::Clear),
+            (14.99, Assessment::LowAtStart, Assessment::Clear),
+            (15., Assessment::Clear, Assessment::Clear),
+        ] {
+            assert_eq!(classify(b, 0, 35., 0, true), expected_start);
+            assert_eq!(classify(b, 0, 35., 0, false), expected_active);
+            assert_eq!(classify(b, 1, 35., 0, false), Assessment::Clear);
+        }
+        assert_eq!(classify(5., -1, 35., 0, false), Assessment::Unknown);
+        assert_eq!(classify(99., 1, 35., -1, false), Assessment::Unknown);
+    }
+}

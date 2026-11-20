@@ -258,3 +258,86 @@ pub extern "C" fn nespat_profile_hash(p: &Profile, helper: bool) -> CFStringRef 
     }))
     .as_concrete_TypeRef()
 }
+
+#[cfg(test)]
+mod regression {
+    use super::*;
+    fn local() -> Profile {
+        let mut p = Profile::fixture(unsafe { libc::getuid() });
+        let read = |key: &str| {
+            let out = std::process::Command::new("/usr/sbin/sysctl")
+                .args(["-n", key])
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        p.doc.host_model = Some(read("hw.model"));
+        p.doc.os_build = Some(read("kern.osversion"));
+        p
+    }
+    #[test]
+    fn disabled_or_replaced_trust_cannot_continue_authority() {
+        let mut p = local();
+        assert!(p.enabled_with(&p));
+        let initial = p.setup;
+        for change in [
+            "enabled",
+            "uid",
+            "gui",
+            "helper",
+            "setup",
+            "model",
+            "build",
+            "exclusive",
+            "acceptance",
+            "selected",
+            "trial",
+        ] {
+            let mut other = local();
+            other.setup = initial;
+            match change {
+                "enabled" => other.doc.enabled = false,
+                "uid" => other.doc.uid += 1,
+                "gui" => other.doc.gui_hash = "0".repeat(40),
+                "helper" => other.doc.helper_hash = "1".repeat(40),
+                "setup" => other.setup = [0; 16],
+                "model" => other.doc.host_model = None,
+                "build" => other.doc.os_build = Some(String::new()),
+                "exclusive" => other.doc.exclusive_control = Some(false),
+                "acceptance" => other.doc.acceptance_only = Some(true),
+                "selected" => other.doc.selected_lifetime = Some(false),
+                "trial" => other.doc.trial_only = Some(true),
+                _ => unreachable!(),
+            }
+            assert!(!p.enabled_with(&other), "{change}");
+        }
+        p.doc.uid += 1;
+        assert!(p.client_requirements().is_none());
+    }
+    #[test]
+    fn bounded_trial_needs_same_boot_unexpired_short_window_and_selected_power_source() {
+        let mut p = local();
+        p.doc.trial_only = Some(true);
+        p.trial_boot = boot();
+        p.doc.trial_expires = Some(nespat_continuous_seconds() + 80.);
+        assert!(p.enabled_with(&p));
+        assert!(!p.selected());
+        assert!(p.permits_source(1));
+        assert!(!p.permits_source(0));
+        p.doc.trial_on_battery = Some(true);
+        assert!(p.permits_source(0));
+        assert!(!p.permits_source(1));
+        for end in [
+            f64::NAN,
+            nespat_continuous_seconds() - 1.,
+            nespat_continuous_seconds() + 200.,
+        ] {
+            p.doc.trial_expires = Some(end);
+            assert!(!p.enabled_with(&p));
+        }
+        p.doc.trial_expires = Some(nespat_continuous_seconds() + 80.);
+        p.trial_boot = Some([0; 16]);
+        assert!(!p.enabled_with(&p));
+    }
+}
