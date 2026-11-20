@@ -50,6 +50,30 @@ pub extern "C" fn nespat_minutes_to_seconds(minutes: i64) -> i64 {
 mod tests {
     use super::*;
     #[test]
+    fn custom_input_preserves_supported_durations_and_rejects_malformed_values() {
+        let parse = |text: &str| unsafe { nespat_parse_minutes(text.as_ptr(), text.len()) };
+        for minutes in [1, 15, 35, 90, 165, 480, 481, 500, 1440, 10000] {
+            let seconds = parse(&minutes.to_string());
+            assert_eq!(seconds, minutes * 60);
+            assert_eq!(nespat_deadline(50., seconds as f64), 50. + seconds as f64);
+        }
+        for text in [
+            "",
+            "0",
+            "-1",
+            "1.5",
+            "hi",
+            " 1",
+            "+1",
+            "9223372036854775807",
+            "153722867280912931",
+            &"9".repeat(10000),
+        ] {
+            assert_eq!(parse(text), 0);
+        }
+        assert!(nespat_deadline(f64::INFINITY, 60.).is_nan());
+    }
+    #[test]
     fn different_start_and_emergency_thresholds() {
         assert_eq!(classify(14.9, 0, 40.0, 0, true), Assessment::LowAtStart);
         assert_eq!(classify(14.9, 0, 40.0, 0, false), Assessment::Clear);

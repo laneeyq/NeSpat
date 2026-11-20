@@ -23,7 +23,7 @@ pub(crate) struct Form {
     summary: Retained<NSTextField>,
     error: Retained<NSTextField>,
     pub recover: Retained<NSButton>,
-    rules: [Retained<NSBox>; 4],
+    rules: [Retained<NSBox>; 3],
     duration: Retained<NSTextField>,
     pub presets: Retained<NSSegmentedControl>,
     custom: Retained<NSTextField>,
@@ -36,7 +36,6 @@ pub(crate) struct Form {
     details_button: Retained<NSButton>,
     details: Retained<NSGridView>,
     battery_note: Retained<NSTextField>,
-    monitor: Retained<NSButton>,
     pub automatic: Retained<NSButton>,
     pub login: Retained<NSButton>,
     quit: Retained<NSButton>,
@@ -179,7 +178,6 @@ impl Form {
             .unwrap();
             root.addSubview(&details);
             let battery_note = text("", 11., 0., true);
-            let monitor = btn("Мониторинг системы", 5, false, false);
             let automatic = btn("Автоматический режим", 6, true, false);
             let login = btn("Запускать при входе", 7, true, false);
             let quit = btn("Выход", 8, false, false);
@@ -210,7 +208,6 @@ impl Form {
                 details_button,
                 details,
                 battery_note,
-                monitor,
                 automatic,
                 login,
                 quit,
@@ -331,9 +328,6 @@ impl Form {
         }
         extra(&self.battery_note, &r.note, &mut y);
         rule(2, &mut y);
-        place(&self.monitor, 14., y - 2., 272., 20.);
-        y += 20.;
-        rule(3, &mut y);
         place(&self.automatic, 12., y, 210., 18.);
         y += 22.;
         place(&self.login, 12., y, 192., 18.);
@@ -347,6 +341,30 @@ impl Form {
         if self.controller.preferredContentSize() != size {
             self.root.setFrameSize(size);
             self.controller.setPreferredContentSize(size);
+        }
+    }
+    #[cfg(debug_assertions)]
+    pub(crate) fn battery_screen_y(&self) -> Option<f64> {
+        let window = self.root.window()?;
+        Some(
+            window
+                .convertRectToScreen(self.root.convertRect_toView(self.labels[3].frame(), None))
+                .origin
+                .y,
+        )
+    }
+    pub(crate) fn with_anchored_resize(
+        &self,
+        item: *const std::ffi::c_void,
+        render: impl FnOnce(),
+    ) {
+        let before = self.controller.preferredContentSize();
+        render();
+        let after = self.controller.preferredContentSize();
+        if before != after {
+            unsafe {
+                crate::status_item::resize(item, after);
+            }
         }
     }
     pub(crate) fn refresh_details(&self) {

@@ -14,7 +14,9 @@ use std::{
 
 struct Panel {
     item: Retained<NSStatusItem>,
-    popover: Retained<NSPopover>,
+    popover: std::cell::RefCell<Retained<NSPopover>>,
+    #[cfg(debug_assertions)]
+    fixture_anchor: std::cell::OnceCell<Retained<objc2_app_kit::NSView>>,
 }
 
 define_class!(
@@ -27,11 +29,12 @@ define_class!(
         #[unsafe(method(toggleNeSpatPanel:))]
         fn toggle(&self, button: &NSStatusBarButton) {
             let panel = self.ivars();
-            if panel.popover.isShown() {
-                unsafe { panel.popover.performClose(None); }
+            let popover = panel.popover.borrow();
+            if popover.isShown() {
+                unsafe { popover.performClose(None); }
             } else {
-                panel.popover.showRelativeToRect_ofView_preferredEdge(button.bounds(), button, NSRectEdge::MinY);
-                if let Some(window) = panel.popover.contentViewController().and_then(|vc| vc.view().window()) {
+                popover.showRelativeToRect_ofView_preferredEdge(button.bounds(), button, NSRectEdge::MinY);
+                if let Some(window) = popover.contentViewController().and_then(|vc| vc.view().window()) {
                     window.makeKeyWindow();
                 }
             }
@@ -55,7 +58,12 @@ pub unsafe extern "C" fn nespat_status_create(controller: *const NSViewControlle
     popover.setContentViewController(Some(controller));
     popover.setBehavior(NSPopoverBehavior::Transient);
     popover.setAnimates(false);
-    let target = NeSpatStatusTarget::alloc(mtm).set_ivars(Panel { item, popover });
+    let target = NeSpatStatusTarget::alloc(mtm).set_ivars(Panel {
+        item,
+        popover: popover.into(),
+        #[cfg(debug_assertions)]
+        fixture_anchor: Default::default(),
+    });
     let target: Retained<NeSpatStatusTarget> = msg_send![super(target), init];
     button.setTarget(Some(&target));
     button.setAction(Some(sel!(toggleNeSpatPanel:)));
@@ -64,6 +72,60 @@ pub unsafe extern "C" fn nespat_status_create(controller: *const NSViewControlle
     )));
     button.setToolTip(Some(&NSString::from_str("NeSpat")));
     Retained::into_raw(target).cast()
+}
+
+#[cfg(debug_assertions)]
+pub(crate) unsafe fn preview_open(
+    target: *const c_void,
+    anchor: &objc2_app_kit::NSView,
+) -> Option<()> {
+    let target = target.cast::<NeSpatStatusTarget>().as_ref()?;
+    target
+        .ivars()
+        .fixture_anchor
+        .set(Retained::retain(anchor as *const _ as *mut _)?)
+        .ok()?;
+    target
+        .ivars()
+        .popover
+        .borrow()
+        .showRelativeToRect_ofView_preferredEdge(anchor.bounds(), anchor, NSRectEdge::MinY);
+    target.ivars().popover.borrow().isShown().then_some(())
+}
+
+pub(crate) unsafe fn resize(target: *const c_void, size: objc2_foundation::NSSize) {
+    if let Some(target) = target.cast::<NeSpatStatusTarget>().as_ref() {
+        let panel = target.ivars();
+        let mut current = panel.popover.borrow_mut();
+        if !current.isShown() {
+            current.setContentSize(size);
+            return;
+        }
+        let Some(controller) = current.contentViewController() else {
+            return;
+        };
+        let Some(button) = panel.item.button(target.mtm()) else {
+            return;
+        };
+        let anchor: &objc2_app_kit::NSView = &button;
+        #[cfg(debug_assertions)]
+        let anchor = panel.fixture_anchor.get().map_or(anchor, |v| &**v);
+        // AppKit can reuse a stale window frame when a visible popover changes size.
+        // Reuse the controls and controller, and present at the original status-item anchor.
+        let popover = NSPopover::new(target.mtm());
+        popover.setBehavior(current.behavior());
+        popover.setAnimates(false);
+        current.close();
+        current.setContentViewController(None);
+        controller.view().setFrameSize(size);
+        popover.setContentViewController(Some(&controller));
+        popover.setContentSize(size);
+        popover.showRelativeToRect_ofView_preferredEdge(anchor.bounds(), anchor, NSRectEdge::MinY);
+        if let Some(window) = controller.view().window() {
+            window.makeKeyWindow();
+        }
+        *current = popover;
+    }
 }
 
 #[no_mangle]

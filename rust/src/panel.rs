@@ -146,7 +146,9 @@ impl Window {
             }
             message.push_str("Проверьте объекты входа в системных настройках.");
         }
-        form.render(&r, &report, minutes, &hint, &message, now());
+        form.with_anchored_resize(self.status_item.get(), || {
+            form.render(&r, &report, minutes, &hint, &message, now());
+        });
         if let Ok(title) = CString::new(r.title(&report.status)) {
             unsafe {
                 crate::status_item::nespat_status_title(self.status_item.get(), title.as_ptr());
@@ -172,7 +174,6 @@ define_class!(
                 2=>{set_flag(AUTO,false);if r.power==1{w.driver.recover();}else{w.driver.intent(false);}}
                 3 if !busy(&report)=>{let d=f.input.stringValue().to_string();let seconds=unsafe{crate::policy::nespat_parse_minutes(d.as_ptr(),d.len())};if crate::policy::nespat_deadline(now(),seconds as f64).is_finite(){set_custom(seconds/60);f.input.setStringValue(&ns(&custom()));w.input_error.borrow_mut().clear();}else{*w.input_error.borrow_mut()="Введите положительное целое число минут, представимое без переполнения и потери точности срока.".into();}}
                 4=>{f.expanded.set(!f.expanded.get());if f.expanded.get(){f.refresh_details();}}
-                5=>{open(std::path::Path::new("/System/Applications/Utilities/Activity Monitor.app"));}
                 6=>{let on=f.automatic.state()!=0;set_flag(AUTO,on);w.driver.intent(on);}
                 7=>{let (local,installed)=login_context();let ok=crate::login::nespat_login_set(f.login.state()!=0,local,installed);w.login_error.set(!ok);f.login.setState(crate::login::nespat_login_enabled(local,installed) as isize);}
                 8=>w.driver.quit(),
@@ -235,7 +236,9 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
         NSWindow, NSWindowStyleMask,
     };
     use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize};
-    let _app = NSApplication::sharedApplication(m);
+    let app = NSApplication::sharedApplication(m);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    app.finishLaunching();
     let target = NSObject::new();
     let form = Form::build(m, &target, "30");
     let r = Readings {
@@ -250,6 +253,51 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
     let mut report = Report::default();
     form.render(&r, &report, 60, "", "", 0.);
     let expected = form.controller.preferredContentSize();
+    // Exercise the actual popover under a menu-bar item after AppKit lays it out.
+    unsafe {
+        let item = crate::status_item::nespat_status_create(&*form.controller);
+        let visible = objc2_app_kit::NSScreen::mainScreen(m)?.visibleFrame();
+        let anchor = NSWindow::initWithContentRect_styleMask_backing_defer(
+            NSWindow::alloc(m),
+            NSRect::new(
+                NSPoint::new(
+                    visible.origin.x + visible.size.width / 2.,
+                    visible.origin.y + visible.size.height - 30.,
+                ),
+                NSSize::new(42., 20.),
+            ),
+            NSWindowStyleMask::Borderless,
+            NSBackingStoreType::Buffered,
+            false,
+        );
+        anchor.orderFrontRegardless();
+        crate::status_item::preview_open(item, &*anchor.contentView()?)?;
+        let settle = || {
+            objc2_foundation::NSRunLoop::mainRunLoop()
+                .runUntilDate(&objc2_foundation::NSDate::dateWithTimeIntervalSinceNow(0.5));
+        };
+        settle();
+        let window = form.controller.view().window()?;
+        let before = window.frame();
+        let battery_before = form.battery_screen_y()?;
+        for expanded in [true, false] {
+            form.expanded.set(expanded);
+            form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+            settle();
+            let rect = form.controller.view().window()?.frame();
+            let top_delta = rect.origin.y + rect.size.height - before.origin.y - before.size.height;
+            let growth = rect.size.height - before.size.height;
+            println!("Battery expanded={expanded}: top offset {top_delta:.1} pt, height change {growth:.1} pt");
+            if (form.battery_screen_y()? - battery_before).abs() > 1.
+                || top_delta.abs() > 1.
+                || (expanded && growth < 65.)
+                || (!expanded && growth.abs() > 1.)
+            {
+                return None;
+            }
+        }
+        crate::status_item::nespat_status_destroy(item);
+    }
     form.expanded.set(true);
     report.status.error =
         Some("Восстановление не подтверждено. Фоновая служба проверяет состояние сна.".into());

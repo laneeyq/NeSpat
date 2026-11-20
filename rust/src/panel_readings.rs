@@ -190,3 +190,31 @@ impl Monitor {
         self.sample.lock().unwrap().clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn countdown_renders_from_deadline_without_extending_the_session() {
+        let r = Readings {
+            power: 1,
+            helper: true,
+            watchdog: true,
+            ..Default::default()
+        };
+        let mut state = Status {
+            phase: Phase::Prepared,
+            deadline: Some(3661.),
+            ..Default::default()
+        };
+        assert!(r.summary(&state, true, 0.).ends_with("1 ч 01 мин 01 с"));
+        assert!(r.summary(&state, true, 3659.9).ends_with("2 с"));
+        assert!(r.summary(&state, true, 3700.).ends_with("0 с"));
+        assert_eq!(state.deadline, Some(3661.));
+        assert!(r.title(&state).starts_with("☕"));
+        state.error = Some("проверка".into());
+        assert!(r.title(&state).starts_with("⚠"));
+        state.deadline = None;
+        assert!(r.summary(&state, true, 3700.).ends_with("без лимита"));
+    }
+}

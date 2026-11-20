@@ -173,6 +173,83 @@ mod tests {
         }
     }
     #[test]
+    fn automatic_start_requires_an_open_lid_and_verified_safe_observation() {
+        let ready = Observation {
+            has_lease: false,
+            sleep_disabled: 0,
+            start_safe: true,
+            ..active()
+        };
+        assert_eq!(nespat_auto_decide(ready, false).action, Action::Prepare);
+        for (input, expected) in [
+            (
+                Observation {
+                    authorized: false,
+                    ..ready
+                },
+                Action::Unauthorized,
+            ),
+            (
+                Observation {
+                    lid_closed: 1,
+                    ..ready
+                },
+                Action::OpenLid,
+            ),
+            (
+                Observation {
+                    lid_closed: -1,
+                    ..ready
+                },
+                Action::OpenLid,
+            ),
+            (
+                Observation {
+                    active_user: false,
+                    ..ready
+                },
+                Action::OpenLid,
+            ),
+            (
+                Observation {
+                    start_safe: false,
+                    ..ready
+                },
+                Action::Unsafe,
+            ),
+            (
+                Observation {
+                    exhausted: true,
+                    ..ready
+                },
+                Action::Finished,
+            ),
+            (
+                Observation {
+                    desired: false,
+                    ..ready
+                },
+                Action::Off,
+            ),
+            (
+                Observation {
+                    service_verified: false,
+                    ..ready
+                },
+                Action::Unverified,
+            ),
+            (
+                Observation {
+                    sleep_disabled: 1,
+                    ..ready
+                },
+                Action::Foreign,
+            ),
+        ] {
+            assert_eq!(nespat_auto_decide(input, false).action, expected);
+        }
+    }
+    #[test]
     fn rechecks_current_intent_after_preparation() {
         let s = active();
         assert_eq!(nespat_auto_decide(s, true).action, Action::KeepActive);
