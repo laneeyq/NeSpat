@@ -7,36 +7,17 @@ final class LocalFixedPowerInvoker: Sendable {
     init() throws {
         guard nespat_setter_ready() else { throw PrivilegeError.blocked }
     }
-    static func inspectIdle() -> Bool {
-        let fd = nespat_setter_lock()
-        guard fd >= 0 else { return false }
-        close(fd)
-        return true
-    }
+    static func inspectIdle() -> Bool { nespat_setter_idle() }
     func canFinalizePending() -> Bool { Self.inspectIdle() }
     func setDisabled(_ disabled: Bool) throws {
-        if disabled { guard try LocalTrustProfile.load().currentlyEnabled else { throw PrivilegeError.blocked } }
-        let fd = nespat_setter_lock()
-        guard fd >= 0 else { throw PrivilegeError.busy }
-        defer { close(fd) }
-        if disabled {
-            let profile = try LocalTrustProfile.load()
-            guard profile.currentlyEnabled else { throw PrivilegeError.denied }
-            guard SystemSleepObservation.read() == .enabled else { throw PrivilegeError.interference }
-            if profile.trialOnly {
-                // This installation has exactly one real attempt, even across helper crashes.
-                let url = URL(fileURLWithPath: "/Library/Application Support/NeSpatPrivileged/State")
-                let marker = open(url.appendingPathComponent("trial-spent").path,
-                    O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
-                guard marker >= 0 else { throw PrivilegeError.denied }
-                defer { close(marker) }
-                let directory = open(url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-                guard directory >= 0 else { throw PrivilegeError.journal }
-                defer { close(directory) }
-                guard fsync(marker) == 0, fsync(directory) == 0 else { throw PrivilegeError.journal }
-            }
+        switch nespat_set_power(disabled) {
+        case 0: return
+        case 1: throw PrivilegeError.blocked
+        case 2: throw PrivilegeError.busy
+        case 3: throw PrivilegeError.denied
+        case 4: throw PrivilegeError.interference
+        case 5: throw PrivilegeError.journal
+        default: throw PrivilegeError.unconfirmed
         }
-        guard nespat_setter_run(fd, disabled),
-              SystemSleepObservation.read() == (disabled ? .disabled : .enabled) else { throw PrivilegeError.unconfirmed }
     }
 }

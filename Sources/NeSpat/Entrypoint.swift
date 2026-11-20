@@ -1,3 +1,4 @@
+import NeSpatNative
 import AppKit
 import Foundation
 import NeSpatPrivilegeCore
@@ -57,14 +58,12 @@ enum Entrypoint {
         }
         if args.contains("--verify-local-service") {
             Task.detached {
-                do {
-                    let profile = try LocalTrustProfile.load()
-                    guard profile.allowedUID == getuid() else { exit(1) }
-                    let transport = try PrivilegeClient.connectLocal(profile: profile)
-                    try await transport.handshake()
+                if nespat_verify_service() {
                     print("local root helper: strict mutual-pin handshake verified; no enrollment or power request sent")
-                    await transport.close(); exit(0)
-                } catch { print("local helper handshake not verified"); exit(1) }
+                    exit(0)
+                }
+                print("local helper handshake not verified")
+                exit(1)
             }
             dispatchMain()
         }

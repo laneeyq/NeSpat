@@ -20,14 +20,14 @@ const OPERATIONS: [&str; 8] = [
 #[repr(C)]
 #[derive(Default)]
 pub struct Request {
-    id: [u8; 16],
-    session: [u8; 16],
-    minutes: i64,
-    sequence: i64,
-    operation: u8,
-    has_session: bool,
-    has_minutes: bool,
-    has_sequence: bool,
+    pub(crate) id: [u8; 16],
+    pub(crate) session: [u8; 16],
+    pub(crate) minutes: i64,
+    pub(crate) sequence: i64,
+    pub(crate) operation: u8,
+    pub(crate) has_session: bool,
+    pub(crate) has_minutes: bool,
+    pub(crate) has_sequence: bool,
 }
 
 #[no_mangle]

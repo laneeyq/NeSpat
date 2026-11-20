@@ -67,7 +67,7 @@ pub struct Profile {
     trial_boot: Option<[u8; 16]>,
 }
 impl Profile {
-    fn load() -> Option<Self> {
+    pub(crate) fn load() -> Option<Self> {
         let doc = Document::read(&trust_profile()?)?;
         if doc.version != 1 || doc.uid == 0 {
             return None;
@@ -84,6 +84,30 @@ impl Profile {
             setup,
             trial_boot,
         })
+    }
+    pub(crate) fn client_requirements(&self) -> Option<(String, String)> {
+        if self.doc.uid != unsafe { libc::getuid() } {
+            return None;
+        }
+        Some((
+            pin(&self.doc.gui_hash, "local.nespat.app")?,
+            pin(&self.doc.helper_hash, "local.nespat.privilege-helper")?,
+        ))
+    }
+    pub(crate) fn verified_recovery_helper(&self) -> Option<&'static str> {
+        use core_foundation::url::CFURL;
+        const HELPER:&str="/Library/Application Support/NeSpatPrivileged/NeSpat.app/Contents/Library/Helpers/NeSpatPrivilegeHelper";
+        let (_, requirement) = self.client_requirements()?;
+        (self.exclusive()
+            && crate::signing::nespat_matches_code(
+                CFURL::from_path(HELPER, false)?.as_concrete_TypeRef(),
+                CFString::new(&requirement).as_concrete_TypeRef(),
+                true,
+            ))
+        .then_some(HELPER)
+    }
+    pub(crate) fn trial_only(&self) -> bool {
+        self.doc.trial_only == Some(true)
     }
     fn exclusive(&self) -> bool {
         self.doc.exclusive_control == Some(true) && self.doc.acceptance_only != Some(true)

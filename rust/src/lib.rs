@@ -211,3 +211,7 @@ mod pulse;
 mod authority;
 
 mod profile;
+
+pub mod client;
+
+mod session;

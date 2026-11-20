@@ -17,16 +17,21 @@ pub struct Transport {
     requests: HashSet<[u8; 16]>,
     sequence: i64,
 }
+impl Default for Transport {
+    fn default() -> Self {
+        Self {
+            phase: Phase::Unverified,
+            started: false,
+            peer: 0,
+            deadline: 0.0,
+            requests: HashSet::new(),
+            sequence: 0,
+        }
+    }
+}
 #[no_mangle]
 pub extern "C" fn nespat_transport_new() -> *mut Transport {
-    Box::into_raw(Box::new(Transport {
-        phase: Phase::Unverified,
-        started: false,
-        peer: 0,
-        deadline: 0.0,
-        requests: HashSet::new(),
-        sequence: 0,
-    }))
+    Box::into_raw(Box::default())
 }
 #[no_mangle]
 pub unsafe extern "C" fn nespat_transport_drop(t: *mut Transport) {

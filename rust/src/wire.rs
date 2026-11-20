@@ -8,8 +8,8 @@ use std::{mem::ManuallyDrop, ptr};
 
 #[repr(C)]
 pub struct Hello {
-    epoch: [u8; 16],
-    nonce: [u8; 16],
+    pub(crate) epoch: [u8; 16],
+    pub(crate) nonce: [u8; 16],
 }
 
 fn data(value: &Value) -> CFDataRef {
@@ -38,7 +38,7 @@ pub extern "C" fn nespat_hello(h: &Hello, response: bool) -> CFDataRef {
     )
 }
 
-fn read_hello(bytes: &[u8], response: bool) -> Option<Hello> {
+pub(crate) fn read_hello(bytes: &[u8], response: bool) -> Option<Hello> {
     let obj = canonical(bytes, 512)?;
     let fields = obj.as_object()?;
     if fields.len() != 4 || obj["version"].as_i64() != Some(1) || obj["kind"] != kind(response) {
@@ -64,7 +64,7 @@ pub unsafe extern "C" fn nespat_read_hello(
     true
 }
 
-fn operation(bytes: &[u8], epoch: &[u8; 16], unwrap: bool) -> Option<CFDataRef> {
+pub(crate) fn operation(bytes: &[u8], epoch: &[u8; 16], unwrap: bool) -> Option<CFDataRef> {
     if unwrap {
         let obj = canonical(bytes, 8192)?;
         if obj.as_object()?.len() != 3
@@ -96,8 +96,8 @@ pub unsafe extern "C" fn nespat_operation(
 
 #[repr(C)]
 pub struct Correlation {
-    epoch: [u8; 16],
-    id: [u8; 16],
+    pub(crate) epoch: [u8; 16],
+    pub(crate) id: [u8; 16],
 }
 
 // Foundation specifies the historical representation of floating point dates.
@@ -151,7 +151,7 @@ fn valid_payload(obj: &Value) -> Option<()> {
     }
     Some(())
 }
-fn reply(bytes: &[u8], key: &Correlation, unwrap: bool) -> Option<CFDataRef> {
+pub(crate) fn reply(bytes: &[u8], key: &Correlation, unwrap: bool) -> Option<CFDataRef> {
     if bytes.len() > if unwrap { 8192 } else { 4096 } {
         return None;
     }

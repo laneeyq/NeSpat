@@ -16,11 +16,11 @@ extern "C" {
 }
 #[repr(C)]
 pub struct Battery {
-    percent: f64,
-    minutes: i64,
-    external: i8,
-    charging: i8,
-    charged: i8,
+    pub(crate) percent: f64,
+    pub(crate) minutes: i64,
+    pub(crate) external: i8,
+    pub(crate) charging: i8,
+    pub(crate) charged: i8,
 }
 impl Default for Battery {
     fn default() -> Self {

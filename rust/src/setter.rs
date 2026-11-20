@@ -109,3 +109,80 @@ pub unsafe extern "C" fn nespat_setter_run(fd: i32, disabled: bool) -> bool {
         }
     }
 }
+
+use std::os::fd::FromRawFd;
+fn locked() -> Option<File> {
+    let fd = nespat_setter_lock();
+    (fd >= 0).then(|| unsafe { File::from_raw_fd(fd) })
+}
+#[no_mangle]
+pub extern "C" fn nespat_setter_idle() -> bool {
+    locked().is_some()
+}
+
+#[repr(u8)]
+pub enum SetterResult {
+    Confirmed,
+    Blocked,
+    Busy,
+    Denied,
+    Interference,
+    Journal,
+    Unconfirmed,
+}
+fn enabled_profile() -> Option<crate::profile::Profile> {
+    let profile = crate::profile::Profile::load()?;
+    crate::profile::nespat_profile_enabled(&profile).then_some(profile)
+}
+fn spend_trial() -> Result<(), SetterResult> {
+    let dir = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open("/Library/Application Support/NeSpatPrivileged/State")
+        .map_err(|_| SetterResult::Journal)?;
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            c"trial-spent".as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600 as libc::c_int,
+        )
+    };
+    if fd < 0 {
+        return Err(SetterResult::Denied);
+    }
+    let marker = unsafe { File::from_raw_fd(fd) };
+    marker
+        .sync_all()
+        .and_then(|_| dir.sync_all())
+        .map_err(|_| SetterResult::Journal)
+}
+#[no_mangle]
+pub extern "C" fn nespat_set_power(disabled: bool) -> SetterResult {
+    if disabled && enabled_profile().is_none() {
+        return SetterResult::Blocked;
+    }
+    let Some(guard) = locked() else {
+        return SetterResult::Busy;
+    };
+    if disabled {
+        let Some(profile) = enabled_profile() else {
+            return SetterResult::Denied;
+        };
+        if crate::observation::nespat_sleep_disabled() != 0 {
+            return SetterResult::Interference;
+        }
+        if profile.trial_only() {
+            if let Err(reason) = spend_trial() {
+                return reason;
+            }
+        }
+    }
+    if unsafe { nespat_setter_run(guard.as_raw_fd(), disabled) }
+        && crate::observation::nespat_sleep_disabled() == i8::from(disabled)
+    {
+        SetterResult::Confirmed
+    } else {
+        SetterResult::Unconfirmed
+    }
+}

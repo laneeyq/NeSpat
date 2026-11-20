@@ -151,3 +151,20 @@ void * _Nonnull nespat_xpc_open(const void * _Nonnull requirement, const void * 
 void nespat_xpc_exchange(const void * _Nonnull conn, CFDataRef _Nonnull bytes, bool hello,
                          void (^ _Nonnull completion)(CFDataRef _Nullable data, int32_t pid, uint32_t uid, uint8_t error));
 void nespat_xpc_export(const void * _Nonnull connection, const void * _Nonnull endpoint, const void * _Nonnull requirement);
+bool nespat_verify_service(void);
+bool nespat_setter_idle(void);
+uint8_t nespat_set_power(bool disabled);
+typedef struct NeSpatSession NeSpatSession;
+typedef struct {
+    uint8_t boot[16], id[16];
+    double now, deadline, expires, battery, temp;
+    bool has_session, selected, foreign_owner, recovery_only, permitted, active_user;
+    int8_t lid, power, ac, thermal;
+} NeSpatSessionObservation;
+NeSpatSession * _Nonnull nespat_session_new(void);
+void nespat_session_drop(NeSpatSession * _Nonnull session);
+bool nespat_session_observe(NeSpatSession * _Nonnull session, NeSpatSessionObservation * _Nonnull value);
+bool nespat_session_prepare(NeSpatSession * _Nonnull session);
+bool nespat_session_display(NeSpatSession * _Nonnull session, const uint8_t * _Nonnull id);
+bool nespat_session_heartbeat(NeSpatSession * _Nonnull session, const uint8_t * _Nonnull id);
+bool nespat_session_recover(NeSpatSession * _Nonnull session, const uint8_t * _Nonnull id, bool manual);
