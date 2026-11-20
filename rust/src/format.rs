@@ -23,7 +23,7 @@ pub extern "C" fn nespat_format_memory(bytes: u64) -> CFStringRef {
         format!("{gib:.0} ГБ")
     })
 }
-fn duration(seconds: f64) -> String {
+pub(crate) fn duration(seconds: f64) -> String {
     if !seconds.is_finite() || seconds > (1u64 << 53) as f64 {
         return "—".into();
     }

@@ -12,13 +12,11 @@ export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 map=(-Xswiftc -file-prefix-map -Xswiftc "$PWD=NeSpat" -Xswiftc -debug-prefix-map -Xswiftc "$PWD=NeSpat")
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$PWD=NeSpat --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=cargo --remap-path-prefix=$HOME=home"
 MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release --lib --bins --manifest-path rust/Cargo.toml
-for target in NeSpat NeSpatPrivilegeHelper; do
-    swift build -c release --product "$target" "${flags[@]}" "${map[@]}"
-done
+swift build -c release --product NeSpatPrivilegeHelper "${flags[@]}" "${map[@]}"
 bin=$(swift build -c release "${flags[@]}" --show-bin-path)
 app="$stage/NeSpat.app"
 mkdir -p "$app/Contents/"{MacOS,Library/Helpers,Resources}
-cp "$bin/NeSpat" "$app/Contents/MacOS/"
+cp rust/target/release/panel "$app/Contents/MacOS/NeSpat"
 cp "$bin/NeSpatPrivilegeHelper" "$app/Contents/Library/Helpers/"
 cp rust/target/release/check-update "$app/Contents/Library/Helpers/check-update"
 codesign -fs - --options runtime "$app/Contents/Library/Helpers/check-update"

@@ -63,7 +63,7 @@ impl Document {
 }
 pub struct Profile {
     doc: Document,
-    setup: [u8; 16],
+    pub(crate) setup: [u8; 16],
     trial_boot: Option<[u8; 16]>,
 }
 impl Profile {

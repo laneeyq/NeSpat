@@ -215,3 +215,12 @@ mod profile;
 pub mod client;
 
 mod session;
+
+pub mod driver;
+pub mod panel;
+pub mod panel_cli;
+mod panel_meter;
+mod panel_preferences;
+mod panel_readings;
+mod panel_view;
+pub mod panel_worker;

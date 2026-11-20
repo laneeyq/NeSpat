@@ -3,31 +3,31 @@
 #[repr(C)]
 #[derive(Default, Clone, Copy)]
 pub struct Observation {
-    now: f64,
-    wall: f64,
-    last_time: f64,
-    expires: f64,
-    deadline: f64,
-    maximum: f64,
-    has_expiry: bool,
-    has_deadline: bool,
-    has_lease: bool,
-    selected_lifetime: bool,
-    service_verified: bool,
-    authorized: bool,
-    active_user: bool,
-    recovery_only: bool,
-    foreign_owner: bool,
-    known: bool,
-    boot_matches: bool,
-    known_boot_matches: bool,
-    lease_matches: bool,
-    start_safe: bool,
-    running_safe: bool,
-    desired: bool,
-    exhausted: bool,
-    lid_closed: i8,
-    sleep_disabled: i8,
+    pub(crate) now: f64,
+    pub(crate) wall: f64,
+    pub(crate) last_time: f64,
+    pub(crate) expires: f64,
+    pub(crate) deadline: f64,
+    pub(crate) maximum: f64,
+    pub(crate) has_expiry: bool,
+    pub(crate) has_deadline: bool,
+    pub(crate) has_lease: bool,
+    pub(crate) selected_lifetime: bool,
+    pub(crate) service_verified: bool,
+    pub(crate) authorized: bool,
+    pub(crate) active_user: bool,
+    pub(crate) recovery_only: bool,
+    pub(crate) foreign_owner: bool,
+    pub(crate) known: bool,
+    pub(crate) boot_matches: bool,
+    pub(crate) known_boot_matches: bool,
+    pub(crate) lease_matches: bool,
+    pub(crate) start_safe: bool,
+    pub(crate) running_safe: bool,
+    pub(crate) desired: bool,
+    pub(crate) exhausted: bool,
+    pub(crate) lid_closed: i8,
+    pub(crate) sleep_disabled: i8,
 }
 
 #[repr(C)]
@@ -51,11 +51,11 @@ pub enum Action {
 }
 #[repr(C)]
 pub struct Decision {
-    action: Action,
-    record_time: bool,
-    adopt_lease: bool,
-    forget_lease: bool,
-    mark_finished: bool,
+    pub(crate) action: Action,
+    pub(crate) record_time: bool,
+    pub(crate) adopt_lease: bool,
+    pub(crate) forget_lease: bool,
+    pub(crate) mark_finished: bool,
 }
 
 impl Observation {

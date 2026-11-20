@@ -26,23 +26,23 @@ pub struct Session {
 #[repr(C)]
 #[derive(Default)]
 pub struct SessionObservation {
-    boot: [u8; 16],
-    id: [u8; 16],
-    now: f64,
-    deadline: f64,
-    expires: f64,
-    battery: f64,
-    temp: f64,
-    has_session: bool,
-    selected: bool,
-    foreign_owner: bool,
-    recovery_only: bool,
-    permitted: bool,
-    active_user: bool,
-    lid: i8,
-    power: i8,
-    ac: i8,
-    thermal: i8,
+    pub(crate) boot: [u8; 16],
+    pub(crate) id: [u8; 16],
+    pub(crate) now: f64,
+    pub(crate) deadline: f64,
+    pub(crate) expires: f64,
+    pub(crate) battery: f64,
+    pub(crate) temp: f64,
+    pub(crate) has_session: bool,
+    pub(crate) selected: bool,
+    pub(crate) foreign_owner: bool,
+    pub(crate) recovery_only: bool,
+    pub(crate) permitted: bool,
+    pub(crate) active_user: bool,
+    pub(crate) lid: i8,
+    pub(crate) power: i8,
+    pub(crate) ac: i8,
+    pub(crate) thermal: i8,
 }
 fn request(op: u8, session: Option<[u8; 16]>) -> Request {
     Request {
@@ -117,7 +117,7 @@ impl Session {
         self.last_rpc = reply.as_ref().map(|_| nespat_continuous_seconds());
         reply
     }
-    fn heartbeat(&mut self, id: [u8; 16]) -> Option<Value> {
+    pub(crate) fn heartbeat(&mut self, id: [u8; 16]) -> Option<Value> {
         self.sequence = self.sequence.checked_add(1)?;
         let mut req = request(6, Some(id));
         req.has_sequence = self
@@ -151,7 +151,7 @@ impl Session {
         }
         self.call(request(0, None))
     }
-    fn observe(&mut self) -> Option<SessionObservation> {
+    pub(crate) fn observe(&mut self) -> Option<SessionObservation> {
         let reply = self.read_status()?;
         let id = session_id(&reply);
         let selected = reply["selectedLifetime"] == true;
@@ -187,7 +187,7 @@ impl Session {
             thermal,
         })
     }
-    fn prepare(&mut self) -> bool {
+    pub(crate) fn prepare(&mut self) -> bool {
         let Some(minutes) = selected_minutes() else {
             return false;
         };
@@ -196,7 +196,7 @@ impl Session {
         req.minutes = minutes.unwrap_or(0);
         self.call(req).is_some()
     }
-    fn recover(&mut self, id: [u8; 16], manual: bool) -> bool {
+    pub(crate) fn recover(&mut self, id: [u8; 16], manual: bool) -> bool {
         if !manual {
             let Some(r) = self.call(request(7, Some(id))) else {
                 return false;
@@ -230,7 +230,7 @@ impl Session {
         self.cached = None;
         true
     }
-    fn display(&self, id: [u8; 16]) -> bool {
+    pub(crate) fn display(&self, id: [u8; 16]) -> bool {
         if !self.cached.as_ref().is_some_and(|r| {
             r["active"] == true && r["fullAuthority"] == true && session_id(r) == Some(id)
         }) || nespat_active_uid() != unsafe { libc::getuid() }
