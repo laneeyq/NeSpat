@@ -14,6 +14,22 @@ fn version(bundle: &NSBundle) -> Option<Vec<u64>> {
     version.split('.').map(|part| part.parse().ok()).collect()
 }
 
+const SERVICES: [&str; 2] = ["local.nespat.recovery", "local.nespat.privilege-helper"];
+
+fn services_ready(mut registered: impl FnMut(&str) -> bool) -> bool {
+    SERVICES.iter().all(|label| registered(label))
+}
+
+fn service_registered(label: &str) -> bool {
+    Path::new("/Library/LaunchDaemons")
+        .join(format!("{label}.plist"))
+        .is_file()
+        && std::process::Command::new("/bin/launchctl")
+            .args(["print", &format!("system/{label}")])
+            .output()
+            .is_ok_and(|out| out.status.success())
+}
+
 fn route(
     placed: bool,
     ready: bool,
@@ -109,7 +125,7 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
     let ready = profile.and_then(|p| p["enabled"].as_bool()) == Some(true);
     let dest = route(
         placed,
-        ready,
+        ready && services_ready(service_registered),
         NSBundle::bundleWithURL(&url).and_then(|b| version(&b)),
         version(&bundle),
     );
@@ -167,6 +183,22 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn same_version_repairs_missing_service_registrations() {
+        for helper in [false, true] {
+            for watchdog in [false, true] {
+                let ready = services_ready(|label| match label {
+                    "local.nespat.privilege-helper" => helper,
+                    "local.nespat.recovery" => watchdog,
+                    _ => panic!("unexpected service"),
+                });
+                assert_eq!(
+                    route(true, ready, Some(vec![1, 2, 5]), Some(vec![1, 2, 5])),
+                    if helper && watchdog { "panel" } else { "setup" }
+                );
+            }
+        }
+    }
     #[test]
     fn requires_installed_location_and_enabled_matching_panel() {
         assert_eq!(route(false, true, Some(vec![2]), Some(vec![1])), "move");
