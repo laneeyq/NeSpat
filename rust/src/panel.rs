@@ -279,6 +279,22 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
         settle();
         let window = form.controller.view().window()?;
         let before = window.frame();
+        let header_gap = || -> Option<f64> {
+            let view = form.controller.view();
+            let window = view.window()?;
+            let header =
+                window.convertRectToScreen(view.convertRect_toView(form.toggle.frame(), None));
+            Some(
+                window.frame().origin.y + window.frame().size.height
+                    - header.origin.y
+                    - header.size.height,
+            )
+        };
+        let initial_gap = header_gap()?;
+        println!("Popover window top to switch: {initial_gap:.1} pt");
+        if !(5.0..=20.0).contains(&initial_gap) {
+            return None;
+        }
         let battery_before = form.battery_screen_y()?;
         for expanded in [true, false] {
             form.expanded.set(expanded);
@@ -288,11 +304,22 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
             let top_delta = rect.origin.y + rect.size.height - before.origin.y - before.size.height;
             let growth = rect.size.height - before.size.height;
             println!("Battery expanded={expanded}: top offset {top_delta:.1} pt, height change {growth:.1} pt");
-            if (form.battery_screen_y()? - battery_before).abs() > 1.
+            if (header_gap()? - initial_gap).abs() > 1.
+                || (form.battery_screen_y()? - battery_before).abs() > 1.
                 || top_delta.abs() > 1.
                 || (expanded && growth < 65.)
                 || (!expanded && growth.abs() > 1.)
             {
+                return None;
+            }
+        }
+        for message in [
+            "Восстановление не подтверждено. Проверяем состояние сна.",
+            "",
+        ] {
+            form.with_anchored_resize(item, || form.render(&r, &report, 60, "", message, 0.));
+            settle();
+            if (header_gap()? - initial_gap).abs() > 1. {
                 return None;
             }
         }

@@ -242,10 +242,11 @@ impl Form {
             NSColor::secondaryLabelColor()
         };
         self.summary.setTextColor(Some(&color));
-        place(&self.heading, 12., 16., 210., 19.);
-        place(&self.toggle, 246., 15., 36., 19.);
-        place(&self.summary, 12., 38., 276., 17.);
-        let mut y = 54.;
+        let header_y = 6.;
+        place(&self.heading, 12., header_y, 210., 19.);
+        place(&self.toggle, 246., header_y - 1., 36., 19.);
+        place(&self.summary, 12., header_y + 22., 276., 17.);
+        let mut y = header_y + 38.;
         let extra = |f: &NSTextField, s: &str, y: &mut f64| {
             f.setHidden(s.is_empty());
             if s.is_empty() {

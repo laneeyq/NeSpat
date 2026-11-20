@@ -33,6 +33,9 @@ define_class!(
             if popover.isShown() {
                 unsafe { popover.performClose(None); }
             } else {
+                if let Some(controller) = popover.contentViewController() {
+                    popover.setContentSize(controller.preferredContentSize());
+                }
                 popover.showRelativeToRect_ofView_preferredEdge(button.bounds(), button, NSRectEdge::MinY);
                 if let Some(window) = popover.contentViewController().and_then(|vc| vc.view().window()) {
                     window.makeKeyWindow();
