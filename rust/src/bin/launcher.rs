@@ -38,6 +38,34 @@ fn notice(mtm: MainThreadMarker, title: &str, detail: &str) {
     alert.runModal();
 }
 
+fn embedded_digest() -> Result<&'static str, String> {
+    option_env!("NESPAT_SERVICES_SHA256")
+        .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or_else(|| "В сборке отсутствует контрольная сумма пакета служб".into())
+}
+
+fn install_services() -> Result<(), String> {
+    // Only the release digest varies. All privileged paths and the installer target are fixed.
+    let script = format!(
+        r#"set -eu
+umask 077
+stage=$(/usr/bin/mktemp -d /private/tmp/nespat-services.XXXXXXXX)
+trap '/bin/rm -f "$stage/Services.pkg"; /bin/rmdir "$stage"' EXIT
+/bin/cp /Applications/NeSpat.app/Contents/Resources/Services.pkg "$stage/Services.pkg"
+cd "$stage"
+/bin/echo '{}  Services.pkg' | /usr/bin/shasum -a 256 -c - >/dev/null
+/usr/sbin/installer -pkg "$stage/Services.pkg" -target /"#,
+        embedded_digest()?
+    );
+    let result = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", "on run argv", "-e", "do shell script (item 1 of argv) with prompt \"NeSpat установит службы управления сном.\" with administrator privileges", "-e", "end run", "--", &script])
+        .output().map_err(|e| e.to_string())?;
+    if result.status.success() || String::from_utf8_lossy(&result.stderr).contains("(-128)") {
+        return Ok(());
+    }
+    Err(String::from_utf8_lossy(&result.stderr).trim().to_owned())
+}
+
 fn run(mtm: MainThreadMarker) -> Result<(), String> {
     let bundle = NSBundle::mainBundle();
     let placed = bundle.bundlePath().to_string() == APPLICATION;
@@ -108,12 +136,11 @@ fn run(mtm: MainThreadMarker) -> Result<(), String> {
                 return Ok(());
             }
         }
-        bundle
-            .URLForResource_withExtension(
-                Some(&NSString::from_str("Services")),
-                Some(&NSString::from_str("pkg")),
-            )
-            .ok_or("В приложении отсутствует пакет служб")?
+        if let Err(reason) = install_services() {
+            notice(mtm, "Не удалось установить службы NeSpat", &reason);
+            return Err(reason);
+        }
+        return Ok(());
     } else {
         url
     };

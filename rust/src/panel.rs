@@ -241,7 +241,7 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
     app.finishLaunching();
     let target = NSObject::new();
     let form = Form::build(m, &target, "30");
-    let r = Readings {
+    let mut r = Readings {
         helper: true,
         watchdog: true,
         permitted: true,
@@ -292,7 +292,7 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
         };
         let initial_gap = header_gap()?;
         println!("Popover window top to switch: {initial_gap:.1} pt");
-        if !(5.0..=20.0).contains(&initial_gap) {
+        if !(15.0..=30.0).contains(&initial_gap) {
             return None;
         }
         let battery_before = form.battery_screen_y()?;
@@ -323,6 +323,26 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
                 return None;
             }
         }
+        report.status.phase = crate::driver::Phase::Recovering;
+        report.status.error = Some("Операция не подтверждена; обычный сон необходимо подтвердить перед завершением сессии.".into());
+        form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+        settle();
+        if form.error.frame().size.height <= 18.
+            || form.recover.isHidden()
+            || (header_gap()? - initial_gap).abs() > 1.
+        {
+            return None;
+        }
+        r.power = 1;
+        report.status.phase = crate::driver::Phase::Prepared;
+        report.status.error = None;
+        form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+        settle();
+        if !form.recover.isHidden() || (header_gap()? - initial_gap).abs() > 1. {
+            return None;
+        }
+        r.power = 0;
+        report = Report::default();
         crate::status_item::nespat_status_destroy(item);
     }
     form.expanded.set(true);
@@ -335,7 +355,7 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
     form.expanded.set(false);
     report.status.error = None;
     form.render(&r, &report, 60, "", "", 0.);
-    if form.controller.preferredContentSize() != expected || expected.width != 300. {
+    if form.controller.preferredContentSize() != expected || expected.width != 304. {
         return None;
     }
     let view = form.controller.view();

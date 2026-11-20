@@ -21,7 +21,7 @@ pub(crate) struct Form {
     heading: Retained<NSTextField>,
     pub toggle: Retained<NSSwitch>,
     summary: Retained<NSTextField>,
-    error: Retained<NSTextField>,
+    pub(crate) error: Retained<NSTextField>,
     pub recover: Retained<NSButton>,
     rules: [Retained<NSBox>; 3],
     duration: Retained<NSTextField>,
@@ -47,8 +47,9 @@ pub(crate) struct Form {
 fn ns(s: &str) -> Retained<NSString> {
     NSString::from_str(s)
 }
+pub(crate) const SIDE_PADDING: f64 = 2.;
 fn place(view: &NSView, x: f64, y: f64, w: f64, h: f64) {
-    let r = NSRect::new(NSPoint::new(x, y), NSSize::new(w, h));
+    let r = NSRect::new(NSPoint::new(x + SIDE_PADDING, y), NSSize::new(w, h));
     if view.frame() != r {
         view.setFrame(r);
     }
@@ -87,6 +88,7 @@ impl Form {
         unsafe {
             let root: Retained<NeSpatPanelContent> =
                 objc2::msg_send![NeSpatPanelContent::alloc(m),initWithFrame:NSRect::ZERO];
+            root.setAutoresizesSubviews(false);
             let controller = NSViewController::new(m);
             controller.setView(&root);
             let btn = |title: &str, tag: isize, checkbox: bool, border: bool| {
@@ -126,7 +128,13 @@ impl Form {
             toggle.setAction(Some(sel!(action:)));
             root.addSubview(&toggle);
             let summary = text("", 11., 0., true);
-            let error = text("", 11., 0., false);
+            let wrapped = || {
+                let f = NSTextField::wrappingLabelWithString(&ns(""), m);
+                f.setFont(Some(&NSFont::systemFontOfSize_weight(11., 0.)));
+                root.addSubview(&f);
+                f
+            };
+            let error = wrapped();
             error.setTextColor(Some(&NSColor::systemRedColor()));
             error.setMaximumNumberOfLines(0);
             error.setUsesSingleLineMode(false);
@@ -184,7 +192,8 @@ impl Form {
             quit.setKeyEquivalent(&ns("q"));
             let updates = btn("Автообновления", 9, true, false);
             let check = btn("Проверить", 10, false, true);
-            let message = text("", 11., 0., true);
+            let message = wrapped();
+            message.setTextColor(Some(&NSColor::secondaryLabelColor()));
             message.setMaximumNumberOfLines(0);
             message.setUsesSingleLineMode(false);
             Self {
@@ -242,7 +251,7 @@ impl Form {
             NSColor::secondaryLabelColor()
         };
         self.summary.setTextColor(Some(&color));
-        let header_y = 6.;
+        let header_y = 15.;
         place(&self.heading, 12., header_y, 210., 19.);
         place(&self.toggle, 246., header_y - 1., 36., 19.);
         place(&self.summary, 12., header_y + 22., 276., 17.);
@@ -271,7 +280,8 @@ impl Form {
             report.status.error.as_deref().unwrap_or(""),
             &mut y,
         );
-        self.recover.setHidden(r.power != 1 && (!busy || active));
+        self.recover
+            .setHidden((active && report.status.error.is_none()) || (r.power != 1 && !busy));
         if !self.recover.isHidden() {
             self.recover.setTitle(&ns(if r.power == 1 {
                 "Аварийное восстановление…"
@@ -338,7 +348,7 @@ impl Form {
         place(&self.check, 203., y - 2., 85., 22.);
         y += 23.;
         extra(&self.message, message, &mut y);
-        let size = NSSize::new(300., y + 3.);
+        let size = NSSize::new(300. + 2. * SIDE_PADDING, y + 5.);
         if self.controller.preferredContentSize() != size {
             self.root.setFrameSize(size);
             self.controller.setPreferredContentSize(size);

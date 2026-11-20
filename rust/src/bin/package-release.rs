@@ -102,26 +102,29 @@ fn package(output: &Path) -> Result<()> {
         env::var("RUSTFLAGS").unwrap_or_default(),root.display());
     let target = root.join("rust/target");
     let binaries = target.join("release");
-    let mut cargo = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
-    cargo
-        .env("RUSTFLAGS", flags)
-        .env("CARGO_TARGET_DIR", &target)
-        .env("MACOSX_DEPLOYMENT_TARGET", "14.0")
-        .args([
-            "build",
-            "--locked",
-            "--release",
-            "--manifest-path",
-            "rust/Cargo.toml",
-        ]);
-    for name in ["panel", "helper", "launcher", "setup", "check-update"] {
+    let cargo_build = || {
+        let mut cargo = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+        cargo
+            .env("RUSTFLAGS", &flags)
+            .env("CARGO_TARGET_DIR", &target)
+            .env("MACOSX_DEPLOYMENT_TARGET", "14.0")
+            .args([
+                "build",
+                "--locked",
+                "--release",
+                "--manifest-path",
+                "rust/Cargo.toml",
+            ]);
+        cargo
+    };
+    let mut cargo = cargo_build();
+    for name in ["panel", "helper", "setup", "check-update"] {
         cargo.args(["--bin", name]);
     }
     run(&mut cargo)?;
     for (name, to) in [
         ("panel", &panel),
         ("helper", &helper),
-        ("launcher", &launcher),
         ("setup", &setup),
         ("check-update", &checker),
     ] {
@@ -193,6 +196,11 @@ fn package(output: &Path) -> Result<()> {
         .arg("--package-path")
         .arg(&pkg)
         .arg(&services))?;
+    let digest = format!("{:x}", Sha256::digest(fs::read(&services)?));
+    run(cargo_build()
+        .env("NESPAT_SERVICES_SHA256", digest)
+        .args(["--bin", "launcher"]))?;
+    fs::copy(binaries.join("launcher"), &launcher)?;
     sign(&image, None)?;
     for exe in [&launcher, &panel, &helper, &checker, &setup] {
         checked_executable(exe)?;
