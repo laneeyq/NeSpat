@@ -42,7 +42,8 @@ public final class PrivilegeEngine: @unchecked Sendable {
     private var retiredOwners: Set<OwnerIdentity> = []
     // Tombstones and replay IDs span connections, are bounded, and never silently evicted.
     private var admittedConnections: Set<UUID> = []
-    private var seenRequests: Set<UUID> = []
+    private let replayLedger = nespat_ledger_new()
+    deinit { nespat_ledger_drop(replayLedger) }
     private struct AuthorityIdentity: Equatable {
         let id: UUID
         let owner: Peer
@@ -194,14 +195,13 @@ public final class PrivilegeEngine: @unchecked Sendable {
     }
     private func authorityExpired(_ grant: Grant, at time: TimeInterval) -> Bool {
         let expiry = grant.selectedSession ? grant.sessionExpires : grant.expires
-        guard time.isFinite, expiry.map({ $0 > time }) ?? true else { return true }
-        if let last = grant.lastObservation, time < last { return true }
-        if let last = grant.lastHeartbeat {
-            let elapsed = time - last
-            guard elapsed.isFinite, elapsed >= 0 else { return true }
-            if case .full = grant.scope, let heartbeatPolicy, elapsed >= heartbeatPolicy.timeout { return true }
-        } else if heartbeatPolicy != nil { return true }
-        return false
+        let full: Bool
+        if case .full = grant.scope { full = true } else { full = false }
+        var clock = NeSpatAuthorityClock(expiry: expiry ?? 0, last_observation: grant.lastObservation ?? 0,
+            last_heartbeat: grant.lastHeartbeat ?? 0, timeout: heartbeatPolicy?.timeout ?? 0,
+            has_expiry: expiry != nil, has_observation: grant.lastObservation != nil,
+            has_heartbeat: grant.lastHeartbeat != nil, has_timeout: heartbeatPolicy != nil, full: full)
+        return nespat_authority_expired(&clock, time)
     }
     public func handle(_ request: Request, from peer: Peer) throws -> Reply {
         try serialized {
@@ -223,16 +223,19 @@ public final class PrivilegeEngine: @unchecked Sendable {
                 if request.operation == .revoke { return Reply(state: observe(), session: nil, deadline: nil) }
                 throw PrivilegeError.denied
             }
-            guard !seenRequests.contains(request.id) else { throw PrivilegeError.replay }
-            let replayLimit: Int
-            if case .recovery = grant.scope { replayLimit = 266240 } else { replayLimit = 262144 }
-            if let sequence = request.heartbeatSequence {
-                guard grant.selectedSession, grant.ownedSession == request.session, sequence > grant.heartbeatSequence else { throw PrivilegeError.replay }
-                grant.heartbeatSequence = sequence
-            } else {
-                guard seenRequests.count < replayLimit, grant.requests < 4096 else { throw PrivilegeError.denied }
-                seenRequests.insert(request.id); grant.requests += 1
+            let recovery: Bool
+            if case .recovery = grant.scope { recovery = true } else { recovery = false }
+            var admission = NeSpatRequestAdmission(id: request.id.uuid, sequence: Int64(request.heartbeatSequence ?? 0),
+                last_sequence: Int64(grant.heartbeatSequence), requests: UInt32(grant.requests),
+                has_sequence: request.heartbeatSequence != nil, selected: grant.selectedSession,
+                matching_session: grant.ownedSession == request.session, recovery: recovery)
+            switch nespat_admit_request(replayLedger, &admission) {
+            case 0: break
+            case 1: throw PrivilegeError.replay
+            default: throw PrivilegeError.denied
             }
+            grant.heartbeatSequence = Int(admission.last_sequence)
+            grant.requests = Int(admission.requests)
             grant.lastObservation = observedAt; grants[peer.connection] = grant
             return try journal.exclusive {
                 let record = try load()

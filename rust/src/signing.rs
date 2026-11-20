@@ -89,3 +89,31 @@ pub extern "C" fn nespat_matches_code(
         unsafe { SecStaticCodeCheckValidity(code.as_CFTypeRef(), 1 << 4, req.as_CFTypeRef()) };
     status == 0 && (!require_hardened || hardened(&code) == Some(true))
 }
+
+use std::mem::ManuallyDrop;
+pub(crate) fn pin(hash: &str, id: &str) -> Option<String> {
+    if hash.len() != 40
+        || !hash.bytes().all(|b| b.is_ascii_hexdigit())
+        || !(1..=255).contains(&id.len())
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_'))
+    {
+        return None;
+    }
+    let text = format!(
+        "cdhash H\"{}\" and identifier \"{id}\"",
+        hash.to_ascii_lowercase()
+    );
+    nespat_valid_requirement(CFString::new(&text).as_concrete_TypeRef()).then_some(text)
+}
+#[no_mangle]
+pub unsafe extern "C" fn nespat_code_pin(hash: CFStringRef, id: CFStringRef) -> CFStringRef {
+    pin(
+        &CFString::wrap_under_get_rule(hash).to_string(),
+        &CFString::wrap_under_get_rule(id).to_string(),
+    )
+    .map_or(ptr::null(), |s| {
+        ManuallyDrop::new(CFString::new(&s)).as_concrete_TypeRef()
+    })
+}

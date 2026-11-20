@@ -1,6 +1,5 @@
 import NeSpatNative
 import Foundation
-import CryptoKit
 import Darwin
 
 // File-system seam is internal for unprivileged fixture tests. Wire API never accepts a path.
@@ -21,37 +20,18 @@ public final class ProtectedJournal: PersistentRecoveryJournal {
         return journal
     }
     init(path: String, owner: uid_t) throws {
-        guard path.hasPrefix("/"), !path.split(separator: "/").contains("..") else { throw PrivilegeError.journal }
+        var files = NeSpatJournalFiles()
+        guard nespat_open_journal(path as CFString, owner, &files) else { throw PrivilegeError.journal }
+        directory = files.directory
+        lockFD = files.lock
         uid = owner
-        var fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-        guard fd >= 0 else { throw PrivilegeError.journal }
-        do {
-            try Self.check(fd, directory: true, owner: owner)
-            for part in path.split(separator: "/") {
-                let next = openat(fd, String(part), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-                guard next >= 0 else { throw PrivilegeError.journal }
-                close(fd); fd = next
-                try Self.check(fd, directory: true, owner: owner)
-            }
-            directory = fd
-            let locked = openat(fd, "lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
-            guard locked >= 0 else { throw PrivilegeError.journal }
-            do { try Self.check(locked, directory: false, owner: owner) }
-            catch { close(locked); throw error }
-            lockFD = locked
-        } catch { close(fd); throw error }
     }
-    // Test adapter pins an already open fixture directory; does not relax the production walker.
     init(testDirectoryFD fd: Int32, owner: uid_t) throws {
+        var files = NeSpatJournalFiles()
+        guard nespat_open_pinned_journal(fd, owner, &files) else { throw PrivilegeError.journal }
+        directory = files.directory
+        lockFD = files.lock
         uid = owner
-        let copy = fcntl(fd, F_DUPFD_CLOEXEC, 0)
-        guard copy >= 0 else { throw PrivilegeError.journal }
-        do { try Self.check(copy, directory: true, owner: owner) } catch { close(copy); throw error }
-        directory = copy
-        let lock = openat(copy, "lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
-        guard lock >= 0 else { close(copy); throw PrivilegeError.journal }
-        do { try Self.check(lock, directory: false, owner: owner) } catch { close(lock); close(copy); throw error }
-        lockFD = lock
     }
     deinit { close(lockFD); close(directory) }
     public func exclusive<T>(_ body: () throws -> T) throws -> T {
@@ -63,13 +43,12 @@ public final class ProtectedJournal: PersistentRecoveryJournal {
         try Self.check(lockFD, directory: false, owner: uid)
         return try body()
     }
-    private struct Integrity: Codable { let payload: Data; let sha256: String }
     private func canonical<T: Encodable>(_ value: T) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return try encoder.encode(value)
     }
-    private func digest(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
+    private func digest(_ bytes: Data) -> String { nespat_journal_digest(bytes as CFData) as String }
     private func envelope() throws -> Envelope {
         guard held else { throw PrivilegeError.journal }
         var bytes = [UInt8](repeating: 0, count: 8193)
@@ -78,9 +57,8 @@ public final class ProtectedJournal: PersistentRecoveryJournal {
         guard count >= 0 else { throw PrivilegeError.journal }
         var payload = Data(bytes.prefix(Int(count)))
         if requireProvisioned {
-            let box = try JSONDecoder().decode(Integrity.self, from: payload)
-            guard box.sha256 == digest(box.payload), try canonical(box) == payload else { throw PrivilegeError.journal }
-            payload = box.payload
+            guard let verified = nespat_journal_integrity(payload as CFData, true) else { throw PrivilegeError.journal }
+            payload = verified as Data
         }
         let envelope = try JSONDecoder().decode(Envelope.self, from: payload)
         if requireProvisioned, try canonical(envelope) != payload { throw PrivilegeError.journal }
@@ -130,7 +108,11 @@ public final class ProtectedJournal: PersistentRecoveryJournal {
         guard held else { throw PrivilegeError.journal }
         _ = try envelope()
         let payload = try canonical(value)
-        let data = requireProvisioned ? try canonical(Integrity(payload: payload, sha256: digest(payload))) : payload
+        var data = payload
+        if requireProvisioned {
+            guard let wrapped = nespat_journal_integrity(payload as CFData, false) else { throw PrivilegeError.journal }
+            data = wrapped as Data
+        }
         let saved = data.withUnsafeBytes { bytes in
             nespat_journal_write(directory, uid, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
         }

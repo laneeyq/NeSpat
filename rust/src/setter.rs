@@ -16,7 +16,7 @@ const LOCK: &str = "/Library/Application Support/NeSpatPrivileged/State/setter.l
 extern "C" {
     fn acl_get_fd_np(fd: i32, kind: i32) -> *mut libc::c_void;
     fn acl_free(acl: *mut libc::c_void) -> i32;
-    fn clock_gettime_nsec_np(clock: libc::clockid_t) -> u64;
+    pub(crate) fn clock_gettime_nsec_np(clock: libc::clockid_t) -> u64;
 }
 fn lock_file(create: bool) -> io::Result<File> {
     if unsafe { libc::geteuid() } != 0 {

@@ -1,3 +1,4 @@
+import NeSpatNative
 import Foundation
 import Darwin
 
@@ -26,7 +27,6 @@ public enum RecoveryPolicy {
     public static let emergency: TimeInterval = 30
     // Kernel boot-scoped continuous clock, includes system sleep; no Instant serialization.
     public static func continuousSeconds() -> TimeInterval {
-        let ticks = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)
-        return ticks > 0 ? Double(ticks) / 1_000_000_000 : .nan
+        nespat_continuous_seconds()
     }
 }

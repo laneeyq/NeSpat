@@ -10,15 +10,12 @@ public struct ExactCodePin: Sendable {
     public let signingIdentifier: String
     public let requirement: String
     public init(codeDirectoryHash: String, signingIdentifier: String) throws {
-        guard codeDirectoryHash.utf8.count == 40,
-              codeDirectoryHash.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
-              !signingIdentifier.isEmpty, signingIdentifier.utf8.count <= 255,
-              signingIdentifier.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [45,46,95].contains($0) }) else {
+        guard let text = nespat_code_pin(codeDirectoryHash as CFString, signingIdentifier as CFString) else {
             throw PrivilegeError.blocked
         }
-        self.codeDirectoryHash=codeDirectoryHash.lowercased(); self.signingIdentifier=signingIdentifier
-        requirement="cdhash H\"\(self.codeDirectoryHash)\" and identifier \"\(signingIdentifier)\""
-        guard nespat_valid_requirement(requirement as CFString) else { throw PrivilegeError.blocked }
+        self.codeDirectoryHash = codeDirectoryHash.lowercased()
+        self.signingIdentifier = signingIdentifier
+        requirement = text as String
     }
     // A file check is not dynamic XPC peer authentication. No bytes/identity are trusted
     // merely because they live at a chosen pathname; signature integrity is checked too.

@@ -30,10 +30,9 @@ public enum SystemSleepObservation {
 
 public enum SystemBootIdentity {
     public static func read() -> UUID? {
-        var bytes = [UInt8](repeating: 0, count: 128), count = 128
-        guard sysctlbyname("kern.bootsessionuuid", &bytes, &count, nil, 0) == 0,
-              count > 0, count <= bytes.count else { return nil }
-        return decode(Array(bytes.prefix(count)))
+        var id = uuid_t(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+        let ok = withUnsafeMutableBytes(of: &id) { nespat_boot($0.bindMemory(to: UInt8.self).baseAddress!) }
+        return ok ? UUID(uuid: id) : nil
     }
     static func decode(_ bytes: [UInt8]) -> UUID? {
         guard bytes.count == 37, bytes.last == 0,
@@ -66,16 +65,12 @@ public enum SystemOwnerLiveness {
         return stamp
     }
     static func snapshot(pid: Int32, boot: UUID) -> Snapshot {
-        guard pid > 0 else { return .unavailable }
-        var info = proc_bsdinfo()
-        errno = 0
-        let result = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout.size(ofValue: info)))
-        guard result == MemoryLayout.size(ofValue: info) else { return errno == ESRCH ? .absent : .unavailable }
-        guard info.pbi_pid == UInt32(pid) else { return .unavailable }
-        let stamp = OwnerProcessStamp(pid: pid, uid: info.pbi_uid, startSeconds: info.pbi_start_tvsec,
-                                      startMicroseconds: info.pbi_start_tvusec, bootID: boot)
-        guard stamp.isValid else { return .unavailable }
-        return .process(stamp)
+        var value = NeSpatProcessStamp()
+        switch nespat_snapshot(pid, &value) {
+        case 0: return .absent
+        case 1: return .process(OwnerProcessStamp(pid: pid, uid: value.uid, startSeconds: value.seconds, startMicroseconds: value.micros, bootID: boot))
+        default: return .unavailable
+        }
     }
     static func evaluate(_ expected: OwnerProcessStamp?, boot: UUID?, snapshot: Snapshot) -> OwnerLiveness {
         guard let expected, expected.isValid, boot == expected.bootID else { return .unknown }

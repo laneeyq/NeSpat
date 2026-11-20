@@ -199,3 +199,15 @@ mod setter;
 mod signing;
 mod status_item;
 mod xpc;
+
+mod wire;
+
+mod transport;
+
+mod host;
+
+mod pulse;
+
+mod authority;
+
+mod profile;

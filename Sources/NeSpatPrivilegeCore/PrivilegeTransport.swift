@@ -1,4 +1,5 @@
 import Foundation
+import NeSpatNative
 
 public enum PrivilegeTransportError: Error, Equatable, Sendable {
     case closed, unverified, malformed, authentication, timeout, replay, canceled, busy, connection
@@ -22,20 +23,20 @@ protocol HelperChannel: AnyObject, Sendable {
 /// One connection epoch per instance. No raw connection/proxy, receipt or untyped RPC API.
 /// Reconnection requires a new factory result and a fresh handshake; CLOSED is terminal.
 public actor PrivilegeTransport {
-    public enum State: Sendable { case unverified, peerVerified, active, closed }
-    public private(set) var state = State.unverified
+    public enum State: UInt8, Sendable { case unverified, peerVerified, active, closed }
+    private final class NativeEpoch {
+        let handle = nespat_transport_new()
+        deinit { nespat_transport_drop(handle) }
+    }
+    private let native = NativeEpoch()
+    public var state: State { State(rawValue: nespat_transport_phase(native.handle)) ?? .closed }
     private let channel: any HelperChannel
     private let hello = HelperHello(epoch:UUID(),nonce:UUID())
     private let timeout: TimeInterval
     private let now: @Sendable () -> TimeInterval
-    private var started = false
-    private var verified: HelperPeerCredentials?
-    private var deadline: TimeInterval = 0
     private var waiting: CheckedContinuation<Void,any Error>?
     private var operation: (id:UUID,token:UUID,continuation:CheckedContinuation<Reply,any Error>)?
     private var timer: Task<Void,Never>?
-    private var lastHeartbeatSequence = 0
-    private var requests: Set<UUID> = []
     init(channel: any HelperChannel, timeout: TimeInterval = 10,
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.channel=channel; self.timeout=timeout; self.now=now
@@ -44,16 +45,13 @@ public actor PrivilegeTransport {
     public func close() { fail(.closed) }
     private func fail(_ error: PrivilegeTransportError) {
         guard state != .closed else { return }
-        state = .closed; verified=nil; timer?.cancel(); timer=nil
+        nespat_transport_close(native.handle); timer?.cancel(); timer=nil
         let h=waiting, op=operation; waiting=nil; operation=nil
         channel.invalidate()
         h?.resume(throwing:error); op?.continuation.resume(throwing:error)
     }
     private func armTimeout(token: UUID?) throws {
-        let time=now()
-        guard timeout.isFinite, timeout > 0, timeout <= 60, time.isFinite,
-              (time+timeout).isFinite else { throw PrivilegeTransportError.timeout }
-        deadline=time+timeout
+        guard nespat_transport_arm(native.handle, now(), timeout) else { throw PrivilegeTransportError.timeout }
         let interval=timeout, epoch=hello.epoch
         timer=Task { [weak self] in
             do { try await Task.sleep(for:.seconds(interval)) } catch { return }
@@ -67,8 +65,7 @@ public actor PrivilegeTransport {
     }
     public func handshake() async throws {
         guard !Task.isCancelled else { fail(.canceled); throw PrivilegeTransportError.canceled }
-        guard state == .unverified, !started else { fail(.replay); throw PrivilegeTransportError.replay }
-        started=true
+        guard nespat_transport_start(native.handle) else { fail(.replay); throw PrivilegeTransportError.replay }
         do {
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
@@ -95,9 +92,10 @@ public actor PrivilegeTransport {
         do {
             let value=try result.get()
             guard value.peer.isRoot else { throw PrivilegeTransportError.authentication }
-            guard now().isFinite, now() < deadline else { throw PrivilegeTransportError.timeout }
+            guard nespat_transport_timely(native.handle, now()) else { throw PrivilegeTransportError.timeout }
             guard try HelperWire.decodeHello(value.bytes,response:true) == hello else { throw PrivilegeTransportError.replay }
-            timer?.cancel(); timer=nil; waiting=nil; verified=value.peer; state = .peerVerified
+            guard nespat_transport_verify(native.handle, value.peer.pid, value.peer.euid) else { throw PrivilegeTransportError.authentication }
+            timer?.cancel(); timer=nil; waiting=nil
             continuation.resume()
         } catch { fail((error as? PrivilegeTransportError) ?? .malformed) }
     }
@@ -105,12 +103,15 @@ public actor PrivilegeTransport {
         guard !Task.isCancelled else { fail(.canceled); throw PrivilegeTransportError.canceled }
         guard state == .peerVerified || state == .active else { fail(.unverified); throw PrivilegeTransportError.unverified }
         guard operation == nil else { fail(.busy); throw PrivilegeTransportError.busy }
-        guard !requests.contains(request.id), request.heartbeatSequence.map({ $0 > lastHeartbeatSequence }) ?? (requests.count < 4096) else { fail(.replay); throw PrivilegeTransportError.replay }
+        var id = request.id.uuid
+        let reserved = withUnsafeBytes(of: &id) { buffer in
+            nespat_transport_reserve(native.handle, buffer.bindMemory(to: UInt8.self).baseAddress!,
+                                     request.heartbeatSequence != nil, Int64(request.heartbeatSequence ?? 0))
+        }
+        guard reserved else { fail(.replay); throw PrivilegeTransportError.replay }
         let bytes: Data
         do { bytes=try HelperWire.operation(request,epoch:hello.epoch) }
         catch { fail(.malformed); throw PrivilegeTransportError.malformed }
-        if let sequence = request.heartbeatSequence { lastHeartbeatSequence = sequence } else { requests.insert(request.id) }
-        state = .active
         let result: Reply = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let token=UUID(), epoch=hello.epoch
@@ -131,8 +132,8 @@ public actor PrivilegeTransport {
         guard state == .active, let current=operation, current.token == token else { fail(.replay); return }
         do {
             let value=try result.get()
-            guard value.peer.isRoot, value.peer == verified else { throw PrivilegeTransportError.authentication }
-            guard now().isFinite, now() < deadline else { throw PrivilegeTransportError.timeout }
+            guard nespat_transport_peer(native.handle, value.peer.pid, value.peer.euid) else { throw PrivilegeTransportError.authentication }
+            guard nespat_transport_timely(native.handle, now()) else { throw PrivilegeTransportError.timeout }
             let reply=try HelperWire.decodeReply(value.bytes,id:current.id,epoch:epoch)
             operation=nil; timer?.cancel(); timer=nil; current.continuation.resume(returning:reply)
         } catch { fail((error as? PrivilegeTransportError) ?? .malformed) }

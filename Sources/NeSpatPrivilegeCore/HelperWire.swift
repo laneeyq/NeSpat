@@ -1,5 +1,6 @@
 import Foundation
 import CoreFoundation
+import NeSpatNative
 
 // Separate non-secret handshake: status is deliberately NOT used because it enrolls.
 @objc public protocol HelperHandshakeRPC {
@@ -24,74 +25,43 @@ enum HelperWire {
         return CFGetTypeID(n) != CFBooleanGetTypeID() && n.stringValue == "1"
     }
     static func hello(_ value: HelperHello, response: Bool = false) throws -> Data {
-        try JSONSerialization.data(withJSONObject: ["version":1, "kind":response ? "helloReply" : "hello",
-            "epoch":value.epoch.uuidString,"nonce":value.nonce.uuidString], options:[.sortedKeys])
+        var fields = NeSpatHello(epoch: value.epoch.uuid, nonce: value.nonce.uuid)
+        return nespat_hello(&fields, response) as Data
     }
     static func decodeHello(_ bytes: Data, response: Bool = false) throws -> HelperHello {
-        let f = try object(bytes, limit: 512)
-        guard Set(f.keys) == ["version","kind","epoch","nonce"], version(f),
-              f["kind"] as? String == (response ? "helloReply" : "hello"),
-              let e = f["epoch"] as? String, let epoch = UUID(uuidString:e),
-              let n = f["nonce"] as? String, let nonce = UUID(uuidString:n) else { throw PrivilegeTransportError.malformed }
-        return HelperHello(epoch:epoch,nonce:nonce)
+        var fields = NeSpatHello()
+        guard nespat_read_hello(bytes as CFData, response, &fields) else { throw PrivilegeTransportError.malformed }
+        return HelperHello(epoch: UUID(uuid: fields.epoch), nonce: UUID(uuid: fields.nonce))
     }
-    static func requestData(_ value: Request) throws -> Data {
-        try value.encoded()
+    static func requestData(_ value: Request) throws -> Data { try value.encoded() }
+    private static func envelope(_ bytes: Data, epoch: UUID, unwrap: Bool) throws -> Data {
+        var id = epoch.uuid
+        return try withUnsafeBytes(of: &id) { buffer in
+            guard let result = nespat_operation(bytes as CFData, buffer.bindMemory(to: UInt8.self).baseAddress!, unwrap) else {
+                throw PrivilegeTransportError.malformed
+            }
+            return result as Data
+        }
     }
     static func operation(_ value: Request, epoch: UUID) throws -> Data {
-        try JSONSerialization.data(withJSONObject:["version":1,"epoch":epoch.uuidString,
-            "request":object(requestData(value),limit:4096)],options:[.sortedKeys])
+        try envelope(requestData(value), epoch: epoch, unwrap: false)
     }
     static func decodeOperation(_ bytes: Data, epoch: UUID) throws -> (Request, Data) {
-        let f = try object(bytes)
-        guard Set(f.keys) == ["version","epoch","request"], version(f),
-              f["epoch"] as? String == epoch.uuidString, let request = f["request"] as? [String:Any] else { throw PrivilegeTransportError.malformed }
-        let data = try JSONSerialization.data(withJSONObject:request,options:[.sortedKeys])
+        let data = try envelope(bytes, epoch: epoch, unwrap: true)
         return (try Request.decode(data), data)
     }
+    private static func replyPayload(_ bytes: Data, id: UUID, epoch: UUID, unwrap: Bool) throws -> Data {
+        var key = NeSpatCorrelation(epoch: epoch.uuid, id: id.uuid)
+        guard let result = nespat_reply(bytes as CFData, &key, unwrap) else { throw PrivilegeTransportError.malformed }
+        return result as Data
+    }
     static func operationReply(_ bytes: Data, id: UUID, epoch: UUID) throws -> Data {
-        guard bytes.count <= 4096, let payload = try JSONSerialization.jsonObject(with: bytes) as? [String:Any] else {
-            throw PrivilegeTransportError.malformed
-        }
-        return try JSONSerialization.data(withJSONObject:["version":1,"epoch":epoch.uuidString,
-            "id":id.uuidString,"payload":payload],options:[.sortedKeys])
+        try replyPayload(bytes, id: id, epoch: epoch, unwrap: false)
     }
     static func decodeReply(_ bytes: Data, id: UUID, epoch: UUID) throws -> Reply {
-        let f = try object(bytes)
-        guard Set(f.keys) == ["version","epoch","id","payload"], version(f),
-              f["epoch"] as? String == epoch.uuidString, f["id"] as? String == id.uuidString,
-              let p = f["payload"] as? [String:Any], Set(p.keys).isSubset(of:["state","session","deadline","authorityExpires","active","fullAuthority","recoveryTicket","selectedLifetime"]),
-              let s = p["state"] as? String, let state = ObservedSleep(rawValue:s) else { throw PrivilegeTransportError.malformed }
-        var session: UUID?, deadline: Date?
-        if let value = p["session"] {
-            guard let text = value as? String, let id = UUID(uuidString:text) else { throw PrivilegeTransportError.malformed }
-            session = id
-        }
-        if let value = p["deadline"] {
-            guard session != nil, let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
-                  n.doubleValue.isFinite, abs(n.doubleValue) <= 9_007_199_254_740_992 else { throw PrivilegeTransportError.malformed }
-            deadline = Date(timeIntervalSinceReferenceDate:n.doubleValue)
-        }
-        var expires: TimeInterval?
-        if let value = p["authorityExpires"] {
-            guard session != nil, let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
-                  n.doubleValue.isFinite, n.doubleValue >= 0 else { throw PrivilegeTransportError.malformed }
-            expires = n.doubleValue
-        }
-        var active: Bool?, full: Bool?, selected: Bool?
-        for key in ["active", "fullAuthority", "selectedLifetime"] {
-            if let value = p[key] {
-                guard CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID(), let flag = value as? Bool else { throw PrivilegeTransportError.malformed }
-                if key == "active" { active = flag } else if key == "fullAuthority" { full = flag } else { selected = flag }
-            }
-        }
-        var ticket: String?
-        if let value = p["recoveryTicket"] {
-            guard session != nil, let text = value as? String, text.utf8.count == 64,
-                  text.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw PrivilegeTransportError.malformed }
-            ticket = text
-        }
-        return Reply(state:state,session:session,deadline:deadline,authorityExpires:expires,active:active,fullAuthority:full,recoveryTicket:ticket,selectedLifetime:selected)
+        let data = try replyPayload(bytes, id: id, epoch: epoch, unwrap: true)
+        guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else { throw PrivilegeTransportError.malformed }
+        return reply
     }
     static let denied = Data(#"{"error":"denied-or-unconfirmed"}"#.utf8)
 }

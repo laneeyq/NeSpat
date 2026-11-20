@@ -1,3 +1,4 @@
+import NeSpatNative
 import Foundation
 
 /// Trusted server bootstrap input, never decoded from RPC/config/environment. There is
@@ -12,9 +13,6 @@ public struct FullGrantLifetimePolicy: Sendable {
         self.maximumLifetime=maximumLifetime
     }
     func validate(confirmedAt: TimeInterval, expires: TimeInterval) throws {
-        guard confirmedAt.isFinite, expires.isFinite else { throw PrivilegeError.denied }
-        let duration=expires-confirmedAt
-        // Check the subtraction itself: two finite endpoints can overflow to infinity.
-        guard duration.isFinite, duration > 0, duration <= maximumLifetime else { throw PrivilegeError.denied }
+        guard nespat_valid_grant(confirmedAt, expires, maximumLifetime) else { throw PrivilegeError.denied }
     }
 }

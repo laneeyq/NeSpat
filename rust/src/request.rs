@@ -44,7 +44,7 @@ pub extern "C" fn nespat_valid_request(r: &Request) -> bool {
         && (!r.has_sequence || (r.operation == 6 && r.sequence > 0))
 }
 
-fn uuid(text: &str) -> Option<[u8; 16]> {
+pub(crate) fn uuid(text: &str) -> Option<[u8; 16]> {
     let bytes = text.as_bytes();
     if bytes.len() != 36 {
         return None;
@@ -64,7 +64,7 @@ fn uuid(text: &str) -> Option<[u8; 16]> {
     }
     Some(id)
 }
-fn uuid_text(id: &[u8; 16]) -> String {
+pub(crate) fn uuid_text(id: &[u8; 16]) -> String {
     use std::fmt::Write;
     let mut text = String::with_capacity(36);
     for (i, b) in id.iter().enumerate() {
@@ -75,7 +75,7 @@ fn uuid_text(id: &[u8; 16]) -> String {
     }
     text
 }
-fn decode(bytes: &[u8]) -> Option<Request> {
+pub(crate) fn decode(bytes: &[u8]) -> Option<Request> {
     if bytes.len() > 4096 {
         return None;
     }
