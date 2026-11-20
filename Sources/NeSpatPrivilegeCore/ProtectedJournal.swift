@@ -1,3 +1,4 @@
+import NeSpatNative
 import Foundation
 import CryptoKit
 import Darwin
@@ -71,15 +72,11 @@ public final class ProtectedJournal: PersistentRecoveryJournal {
     private func digest(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
     private func envelope() throws -> Envelope {
         guard held else { throw PrivilegeError.journal }
-        let fd = openat(directory, "authority.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
-        if fd < 0 { if errno == ENOENT && !requireProvisioned { return Envelope(version: 2, record: nil, generation: 0, retry: nil) }; throw PrivilegeError.journal }
-        defer { close(fd) }
-        try Self.check(fd, directory: false, owner: uid)
-        var metadata = stat(); guard fstat(fd, &metadata) == 0, metadata.st_size <= 8192 else { throw PrivilegeError.journal }
         var bytes = [UInt8](repeating: 0, count: 8193)
-        let count = read(fd, &bytes, bytes.count)
-        guard count >= 0, count <= 8192 else { throw PrivilegeError.journal }
-        var payload = Data(bytes.prefix(count))
+        let count = bytes.withUnsafeMutableBufferPointer { nespat_journal_read(directory, uid, $0.baseAddress, $0.count) }
+        if count == -2 && !requireProvisioned { return Envelope(version: 2, record: nil, generation: 0, retry: nil) }
+        guard count >= 0 else { throw PrivilegeError.journal }
+        var payload = Data(bytes.prefix(Int(count)))
         if requireProvisioned {
             let box = try JSONDecoder().decode(Integrity.self, from: payload)
             guard box.sha256 == digest(box.payload), try canonical(box) == payload else { throw PrivilegeError.journal }
@@ -134,38 +131,12 @@ public final class ProtectedJournal: PersistentRecoveryJournal {
         _ = try envelope()
         let payload = try canonical(value)
         let data = requireProvisioned ? try canonical(Integrity(payload: payload, sha256: digest(payload))) : payload
-        guard data.count <= 8192 else { throw PrivilegeError.journal }
-        let name = ".authority-\(UUID().uuidString)"
-        let fd = openat(directory, name, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw PrivilegeError.journal }
-        defer { close(fd); _ = unlinkat(directory, name, 0) }
-        try Self.check(fd, directory: false, owner: uid)
-        try data.withUnsafeBytes { bytes in
-            var written = 0
-            while written < bytes.count {
-                let result = write(fd, bytes.baseAddress!.advanced(by: written), bytes.count - written)
-                if result < 0, errno == EINTR { continue }
-                guard result > 0 else { throw PrivilegeError.journal }
-                written += result
-            }
+        let saved = data.withUnsafeBytes { bytes in
+            nespat_journal_write(directory, uid, bytes.bindMemory(to: UInt8.self).baseAddress, bytes.count)
         }
-        guard fsync(fd) == 0, renameat(directory, name, directory, "authority.json") == 0,
-              fsync(directory) == 0 else { throw PrivilegeError.journal }
+        guard saved else { throw PrivilegeError.journal }
     }
     private static func check(_ fd: Int32, directory: Bool, owner: uid_t) throws {
-        var value = stat()
-        guard fstat(fd, &value) == 0, value.st_uid == owner,
-              value.st_mode & 0o022 == 0,
-              value.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG),
-              directory || (value.st_nlink == 1 && value.st_mode & 0o077 == 0) else { throw PrivilegeError.journal }
-        // POSIX mode does not describe macOS extended ACL grants. The installer must
-        // provision an ACL-free authority path; unknown ACL metadata also fails closed.
-        errno = 0
-        if let acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) {
-            acl_free(UnsafeMutableRawPointer(acl))
-            throw PrivilegeError.journal
-        }
-        // Darwin reports ENOENT when this object has no extended ACL.
-        guard errno == ENOENT else { throw PrivilegeError.journal }
+        guard nespat_journal_check(fd, directory, owner) else { throw PrivilegeError.journal }
     }
 }

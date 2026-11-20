@@ -259,21 +259,14 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
 private struct DurationPresets: NSViewRepresentable {
     @Binding var selection: Int
     @Environment(\.isEnabled) private var isEnabled
-    private static let choices = [("Без лимита", 0), ("1 ч", 60), ("3 ч", 180), ("8 ч", 480)]
 
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
     func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl(labels: Self.choices.map { $0.0 }, trackingMode: .selectOne,
-                                         target: context.coordinator, action: #selector(Coordinator.pick(_:)))
-        control.controlSize = .small
-        let font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-        control.font = font
-        control.segmentDistribution = .fill
-        // Reserve enough room for the full label, then share the rest among the hour presets.
-        let labelWidth = (Self.choices[0].0 as NSString).size(withAttributes: [.font: font]).width
-        control.setWidth(ceil(labelWidth) + 12, forSegment: 0)
-        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        return control
+        let target = Unmanaged.passUnretained(context.coordinator).toOpaque()
+        guard let control = nespat_presets_create(target) else {
+            preconditionFailure("AppKit duration control requires the main thread")
+        }
+        return Unmanaged<NSSegmentedControl>.fromOpaque(control).takeRetainedValue()
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSegmentedControl, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite else { return nil }
@@ -281,15 +274,14 @@ private struct DurationPresets: NSViewRepresentable {
     }
 
     func updateNSView(_ control: NSSegmentedControl, context: Context) {
-        control.selectedSegment = Self.choices.firstIndex { $0.1 == selection } ?? -1
-        control.isEnabled = isEnabled
+        nespat_presets_update(Unmanaged.passUnretained(control).toOpaque(), Int64(selection), isEnabled)
     }
     @MainActor final class Coordinator: NSObject {
         let selection: Binding<Int>
         init(selection: Binding<Int>) { self.selection = selection }
         @objc func pick(_ sender: NSSegmentedControl) {
-            guard choices.indices.contains(sender.selectedSegment) else { return }
-            selection.wrappedValue = choices[sender.selectedSegment].1
+            let minutes = nespat_preset_minutes(sender.selectedSegment)
+            if minutes >= 0 { selection.wrappedValue = Int(minutes) }
         }
     }
 }

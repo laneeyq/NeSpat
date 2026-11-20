@@ -1,3 +1,4 @@
+import NeSpatNative
 import Foundation
 
 public struct AutomaticLease: Sendable, Equatable {
@@ -10,15 +11,7 @@ public struct AutomaticLease: Sendable, Equatable {
         self.id = id; self.boot = boot; self.deadline = deadline; self.expires = expires
         self.selectedLifetime = selectedLifetime
     }
-    func valid(at observation: AutomaticObservation) -> Bool {
-        if expires == nil && deadline == nil { return selectedLifetime }
-        guard let expires, let deadline, expires.isFinite, deadline.timeIntervalSinceReferenceDate.isFinite else { return false }
-        return selectedLifetime || (expires - observation.continuous <= FullGrantLifetimePolicy.productionMaximumLifetime &&
-            deadline.timeIntervalSince(observation.wall) <= FullGrantLifetimePolicy.productionMaximumLifetime)
-    }
-    func expired(at observation: AutomaticObservation) -> Bool {
-        (expires.map { $0 <= observation.continuous } ?? false) || (deadline.map { $0 <= observation.wall } ?? false)
-    }
+
 }
 public struct AutomaticObservation: Sendable {
     public var recoveryOnly = false
@@ -94,67 +87,61 @@ public actor AutomaticSessionService {
         if known == nil && exhausted { state = .blocked("Предыдущая сессия завершена; требуется новое разрешение"); return }
         busy = true; defer { busy = false }
         do {
-            var observation = try await backend.observation()
-            observedPower = observation.power
-            guard observation.serviceVerified else { state = .blocked("Фоновая служба не проверена"); return }
-            guard observation.continuous.isFinite, observation.continuous >= 0,
-                  lastTime.map({ observation.continuous >= $0 }) ?? true else {
-                if let lease = observation.lease { await restore(lease) }
-                else { state = .blocked("Неподтверждённое время") }
-                return
+            let observation = try await backend.observation()
+            if try await apply(observation, afterPrepare: false) {
+                try await backend.prearm(maximumSeconds: FullGrantLifetimePolicy.productionMaximumLifetime)
+                let result = try await backend.observation()
+                _ = try await apply(result, afterPrepare: true)
             }
-            lastTime = observation.continuous
-            if let lease = observation.lease {
-                guard lease.boot == observation.boot, lease.valid(at: observation),
-                      !observation.foreign else { state = .blocked("Владение автоматической сессией не подтверждено"); return }
-                if let known, known != lease { state = .blocked("Запись автоматической сессии изменилась"); return }
-                known = lease
-                let expired = lease.expired(at: observation)
-                if expired { exhausted = true }
-                if !desired || observation.recoveryOnly || expired || observation.activeUser != true || !observation.setupAuthorized ||
-                    observation.safety.emergencyAssessment != .noDangerDetected || observation.lidClosed == nil || observation.power != .disabled {
-                    await restore(lease); return
-                }
-                try await backend.heartbeat(session: lease.id)
-                await updateActiveState(lease, closed: observation.lidClosed == true)
-                return
-            }
-            guard known == nil || (known?.boot == observation.boot && observation.power == .enabled) else {
-                state = .blocked("Журнал утрачен; сон не подтверждён"); return
-            }
-            guard observation.power == .enabled, !observation.foreign else {
-                state = .blocked("Системный сон или чужое владение не подтверждены"); return
-            }
-            if known != nil { exhausted = true; operationError = nil }
-            known = nil
-            guard desired else { state = .off; operationError = nil; return }
-            guard !exhausted else { state = .blocked("Предыдущая сессия завершена; требуется новое разрешение"); return }
-            guard observation.setupAuthorized else { state = .blocked("Требуется подтверждённая первоначальная настройка"); return }
-            guard observation.activeUser == true, observation.lidClosed == false else {
-                state = .blocked("Для подготовки нужен активный пользователь и открытая крышка"); return
-            }
-            guard observation.safety.activationAssessment == .noDangerDetected else {
-                state = .blocked("Датчики неполны или условия небезопасны"); return
-            }
-            state = .preparing
-            try await backend.prearm(maximumSeconds: FullGrantLifetimePolicy.productionMaximumLifetime)
-            observation = try await backend.observation(); observedPower = observation.power
-            guard observation.serviceVerified, observation.continuous.isFinite, observation.continuous >= (lastTime ?? 0),
-                  let lease = observation.lease, lease.boot == observation.boot,
-                  lease.valid(at: observation), !lease.expired(at: observation),
-                  !observation.foreign else { state = .fault("Подготовка или владение не подтверждены"); return }
-            known = lease; lastTime = observation.continuous
-            // Recheck intent and safety after the await; closing the panel does not cancel the host.
-            if !desired || observation.recoveryOnly || observation.activeUser != true || !observation.setupAuthorized ||
-                observation.safety.emergencyAssessment != .noDangerDetected || observation.lidClosed == nil || observation.power != .disabled {
-                await restore(lease); return
-            }
-            await updateActiveState(lease, closed: observation.lidClosed == true)
         } catch {
             observedPower = .unknown
             operationError = "Операция не подтверждена; обычный сон необходимо проверить"
             state = .fault(operationError!)
         }
+    }
+    // The actor serializes effects. The Rust decision uses current intent after each observation.
+    private func apply(_ o: AutomaticObservation, afterPrepare: Bool) async throws -> Bool {
+        observedPower = o.power
+        let lease = o.lease
+        let input = NeSpatAutoObservation(
+            now: o.continuous, wall: o.wall.timeIntervalSinceReferenceDate, last_time: lastTime ?? 0,
+            expires: lease?.expires ?? 0, deadline: lease?.deadline?.timeIntervalSinceReferenceDate ?? 0,
+            maximum: FullGrantLifetimePolicy.productionMaximumLifetime, has_expiry: lease?.expires != nil,
+            has_deadline: lease?.deadline != nil, has_lease: lease != nil, selected_lifetime: lease?.selectedLifetime == true,
+            service_verified: o.serviceVerified, authorized: o.setupAuthorized, active_user: o.activeUser == true,
+            recovery_only: o.recoveryOnly, foreign_owner: o.foreign, known: known != nil, boot_matches: lease?.boot == o.boot,
+            known_boot_matches: known?.boot == o.boot, lease_matches: lease == known,
+            start_safe: o.safety.activationAssessment == .noDangerDetected, running_safe: o.safety.emergencyAssessment == .noDangerDetected,
+            desired: desired, exhausted: exhausted, lid_closed: o.lidClosed.map { $0 ? 1 : 0 } ?? -1,
+            sleep_disabled: o.power == .enabled ? 0 : o.power == .disabled ? 1 : -1)
+        let decision = nespat_auto_decide(input, afterPrepare)
+        if decision.record_time { lastTime = o.continuous }
+        if decision.adopt_lease { known = lease }
+        if decision.forget_lease { known = nil; operationError = nil }
+        if decision.mark_finished { exhausted = true }
+        switch decision.action {
+        case NSAutoPrepare: state = .preparing; return true
+        case NSAutoOff: state = .off; operationError = nil
+        case NSAutoRestore:
+            guard let lease else { throw PrivilegeError.blocked }
+            await restore(lease)
+        case NSAutoKeepActive:
+            guard let lease else { throw PrivilegeError.blocked }
+            if !afterPrepare { try await backend.heartbeat(session: lease.id) }
+            await updateActiveState(lease, closed: o.lidClosed == true)
+        case NSAutoUnverified: state = .blocked("Фоновая служба не проверена")
+        case NSAutoClock: state = .blocked("Неподтверждённое время")
+        case NSAutoOwnership: state = .blocked("Владение автоматической сессией не подтверждено")
+        case NSAutoReplaced: state = .blocked("Запись автоматической сессии изменилась")
+        case NSAutoLost: state = .blocked("Журнал утрачен; сон не подтверждён")
+        case NSAutoForeign: state = .blocked("Системный сон или чужое владение не подтверждены")
+        case NSAutoFinished: state = .blocked("Предыдущая сессия завершена; требуется новое разрешение")
+        case NSAutoUnauthorized: state = .blocked("Требуется подтверждённая первоначальная настройка")
+        case NSAutoOpenLid: state = .blocked("Для подготовки нужен активный пользователь и открытая крышка")
+        case NSAutoUnsafe: state = .blocked("Датчики неполны или условия небезопасны")
+        default: state = .fault("Подготовка или владение не подтверждены")
+        }
+        return false
     }
     private func updateActiveState(_ lease: AutomaticLease, closed: Bool) async {
         if !closed {

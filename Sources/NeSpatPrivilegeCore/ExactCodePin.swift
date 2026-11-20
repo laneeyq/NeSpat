@@ -1,5 +1,5 @@
 import Foundation
-import Security
+import NeSpatNative
 
 /// Isolated local trust proposal: identify one explicitly approved code version, not a
 /// publisher. The pin MUST come from a separately protected/approved trust anchor.
@@ -18,27 +18,15 @@ public struct ExactCodePin: Sendable {
         }
         self.codeDirectoryHash=codeDirectoryHash.lowercased(); self.signingIdentifier=signingIdentifier
         requirement="cdhash H\"\(self.codeDirectoryHash)\" and identifier \"\(signingIdentifier)\""
-        var parsed: SecRequirement?
-        guard SecRequirementCreateWithString(requirement as CFString,[],&parsed) == errSecSuccess else { throw PrivilegeError.blocked }
+        guard nespat_valid_requirement(requirement as CFString) else { throw PrivilegeError.blocked }
     }
     // A file check is not dynamic XPC peer authentication. No bytes/identity are trusted
     // merely because they live at a chosen pathname; signature integrity is checked too.
     public func matchesFile(_ url: URL) -> Bool {
-        var code: SecStaticCode?, parsed: SecRequirement?
-        guard SecStaticCodeCreateWithPath(url as CFURL,[],&code) == errSecSuccess, let code,
-              SecRequirementCreateWithString(requirement as CFString,[],&parsed) == errSecSuccess else { return false }
-        return SecStaticCodeCheckValidity(code,SecCSFlags(rawValue:kSecCSStrictValidate),parsed) == errSecSuccess
+        nespat_matches_code(url as CFURL, requirement as CFString, false)
     }
     public func matchesHardenedFile(_ url: URL) -> Bool {
-        guard matchesFile(url) else { return false }
-        var code: SecStaticCode?, information: CFDictionary?
-        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
-              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
-              let fields = information as? [String: Any], let flags = fields[kSecCodeInfoFlags as String] as? NSNumber,
-              flags.uint32Value & 0x10000 /* CSCommon.h kSecCodeSignatureRuntime */ != 0 else { return false }
-        let entitlements = fields[kSecCodeInfoEntitlementsDict as String] as? [String: Any] ?? [:]
-        return ["com.apple.security.get-task-allow", "get-task-allow", "com.apple.security.cs.disable-library-validation",
-                "com.apple.security.cs.allow-dyld-environment-variables", "com.apple.security.cs.allow-unsigned-executable-memory"].allSatisfy { entitlements[$0] == nil }
+        nespat_matches_code(url as CFURL, requirement as CFString, true)
     }
     // Requirement validated at construction; must be set once, before activation.
     // UID/audit/connection/root checks and the existing transport are still mandatory.

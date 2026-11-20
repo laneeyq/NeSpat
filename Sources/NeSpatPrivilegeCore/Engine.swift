@@ -1,3 +1,4 @@
+import NeSpatNative
 import Foundation
 
 // Isolated policy only. Trusted enrollment and system executors remain undeployed.
@@ -619,22 +620,24 @@ public final class PrivilegeEngine: @unchecked Sendable {
             throw PrivilegeError.blocked
         }
         if var retry = snapshot.retry {
-            guard retry.record == record, retry.generation == snapshot.generation,
-                  retry.since.isFinite, retry.last.isFinite, retry.since >= 0, retry.last >= retry.since else { throw PrivilegeError.ownership }
-            guard time >= retry.last else {
-                retry.clockFault = true; try store.saveRecoveryRetry(retry, expected: record, generation: snapshot.generation)
+            guard retry.record == record, retry.generation == snapshot.generation else { throw PrivilegeError.ownership }
+            let interval = emergency ? RecoveryPolicy.emergency : RecoveryPolicy.ordinary
+            switch nespat_retry_decision(time, retry.since, retry.last, retry.clockFault, retry.emergency, emergency, manual, interval) {
+            case NSRetryReserve: break
+            case NSRetryClockFault:
+                retry.clockFault = true
+                try store.saveRecoveryRetry(retry, expected: record, generation: snapshot.generation)
                 throw PrivilegeError.blocked
-            }
-            if retry.clockFault {
-                retry.since = time; retry.last = time; retry.clockFault = false; retry.emergency = retry.emergency || emergency
+            case NSRetryRepairClock:
+                retry.since = time; retry.last = time; retry.clockFault = false
+                retry.emergency = retry.emergency || emergency
                 try store.saveRecoveryRetry(retry, expected: record, generation: snapshot.generation)
                 if !manual { return false }
-            }
-            let interval = emergency ? RecoveryPolicy.emergency : RecoveryPolicy.ordinary
-            let priorityFirst = emergency && !retry.emergency
-            if !manual && !priorityFirst && time - retry.since < interval {
-                retry.last = time; try store.saveRecoveryRetry(retry, expected: record, generation: snapshot.generation)
+            case NSRetryWait:
+                retry.last = time
+                try store.saveRecoveryRetry(retry, expected: record, generation: snapshot.generation)
                 return false
+            default: throw PrivilegeError.ownership
             }
         }
         let retry = RecoveryRetry(record: record, generation: snapshot.generation, nonce: UUID(), since: time, last: time, emergency: emergency, clockFault: false)

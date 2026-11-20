@@ -186,5 +186,11 @@ mod stats;
 
 mod observation;
 
+mod automatic;
+mod battery;
+mod duration_control;
+mod journal;
+mod recovery;
 mod setter;
+mod signing;
 mod status_item;

@@ -1,3 +1,4 @@
+import NeSpatNative
 import Foundation
 import Security
 import ServiceManagement
@@ -23,16 +24,11 @@ public struct SigningPolicy: Sendable {
         try Self.validate(guiRequirement); try Self.validate(helperRequirement)
     }
     private static func validate(_ text: String) throws {
-        var requirement: SecRequirement?
-        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess else { throw PrivilegeError.blocked }
+        guard nespat_valid_requirement(text as CFString) else { throw PrivilegeError.blocked }
     }
     // Read-only real code-signing check. Does not establish the identity of an XPC peer.
     public func matchesFile(_ url: URL, helper: Bool) -> Bool {
-        var code: SecStaticCode?, requirement: SecRequirement?
-        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess,
-              SecRequirementCreateWithString((helper ? helperRequirement : guiRequirement) as CFString, [], &requirement) == errSecSuccess,
-              let code else { return false }
-        return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess
+        nespat_matches_code(url as CFURL, (helper ? helperRequirement : guiRequirement) as CFString, false)
     }
     // Listener-wide rejection occurs before the delegate; the per-message requirement
     // below remains mandatory too. Only anonymous/mach-service listeners support this.

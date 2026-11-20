@@ -1,6 +1,6 @@
 import Foundation
 import Darwin
-import IOKit.pwr_mgt
+import NeSpatNative
 import NeSpatPrivilegeCore
 
 // Default invocation remains inert. Only an explicitly installed/approved local daemon
@@ -70,14 +70,8 @@ do {
         heartbeatPolicy: try HeartbeatPolicy(timeout: 20), safetySnapshot: safety,
         exclusivePolicy: policy, requestEmergencySleep: profile.trialOnly ? nil : {
             guard profile.currentlyEnabled else { return }
-            let connection = IOPMFindPowerManagement(0)
-            guard connection != 0 else {
-                NSLog("NeSpat: power management unavailable for emergency sleep")
-                return
-            }
-            defer { IOServiceClose(connection) }
-            let result = IOPMSleepSystem(connection)
-            if result != kIOReturnSuccess { NSLog("NeSpat: emergency sleep request failed (%d)", result) }
+            let result = nespat_emergency_sleep()
+            if result != 0 { NSLog("NeSpat: emergency sleep request failed (%d)", result) }
         }, canFinalizePending: invoker.canFinalizePending)
     if manual {
         guard let id = UUID(uuidString: CommandLine.arguments[2]), CommandLine.arguments[3].utf8.count == 64 else { throw PrivilegeError.denied }

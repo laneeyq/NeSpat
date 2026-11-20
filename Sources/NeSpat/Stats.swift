@@ -87,24 +87,16 @@ final class StatsSampler: @unchecked Sendable {
     // MARK: Батарея (IOPowerSources)
 
     private func readBattery(into sample: inout Sample) {
-        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else {
-            return
-        }
-        for ps in list {
-            guard let desc = IOPSGetPowerSourceDescription(blob, ps as CFTypeRef)?.takeUnretainedValue() as? [String: Any],
-                  desc[kIOPSTypeKey] as? String == kIOPSInternalBatteryType else { continue }
-            (sample.batteryPercent, sample.externalPowerConnected, sample.batteryPercentExact) = Self.parseBattery(desc)
-            sample.isCharging = desc[kIOPSIsChargingKey] as? Bool
-            sample.isFullyCharged = desc[kIOPSIsChargedKey] as? Bool
-            let key = sample.isCharging == true ? kIOPSTimeToFullChargeKey : kIOPSTimeToEmptyKey
-            if sample.isCharging == true || sample.externalPowerConnected == false,
-               let minutes = desc[key] as? Int, minutes > 0 {
-                sample.batteryMinutes = minutes
-            }
-            return
-        }
-        return
+        let battery = nespat_current_battery()
+        sample.batteryPercentExact = battery.percent.isFinite ? battery.percent : nil
+        sample.batteryPercent = sample.batteryPercentExact.map { Int($0.rounded()) }
+        sample.externalPowerConnected = Self.flag(battery.external)
+        sample.isCharging = Self.flag(battery.charging)
+        sample.isFullyCharged = Self.flag(battery.charged)
+        sample.batteryMinutes = battery.minutes > 0 ? Int(battery.minutes) : nil
+    }
+    private static func flag(_ value: Int8) -> Bool? {
+        value < 0 ? nil : value == 1
     }
     static func powerSourceText(_ external: Bool?) -> String {
         switch external {
@@ -115,21 +107,9 @@ final class StatsSampler: @unchecked Sendable {
     }
     /// Missing/unknown/offline source is not proof of disconnected AC.
     static func parseBattery(_ desc: [String: Any]) -> (percent: Int?, externalPowerConnected: Bool?, exact: Double?) {
-        let external: Bool?
-        switch desc[kIOPSPowerSourceStateKey] as? String {
-        case kIOPSACPowerValue: external = true
-        case kIOPSBatteryPowerValue: external = false
-        default: external = nil
-        }
-        func capacity(_ key: String) -> Double? {
-            guard let n = desc[key] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(),
-                  n.doubleValue.isFinite, n.doubleValue >= 0 else { return nil }
-            return n.doubleValue
-        }
-        guard let current = capacity(kIOPSCurrentCapacityKey), let maximum = capacity(kIOPSMaxCapacityKey),
-              maximum > 0, current <= maximum else { return (nil, external, nil) }
-        let exact = current / maximum * 100
-        return (Int(exact.rounded()), external, exact)
+        let battery = nespat_parse_battery(desc as CFDictionary)
+        let exact = battery.percent.isFinite ? battery.percent : nil
+        return (exact.map { Int($0.rounded()) }, flag(battery.external), exact)
     }
 
 }
