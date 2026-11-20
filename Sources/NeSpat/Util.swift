@@ -1,3 +1,4 @@
+import NeSpatNative
 import Foundation
 import Darwin
 
@@ -104,27 +105,9 @@ enum Proc {
 // MARK: - Форматирование (русский UI)
 
 enum Fmt {
-    static func percent(_ v: Double) -> String {
-        "\(Int(v.rounded()))%"
-    }
-
-    static func gb(_ bytes: UInt64) -> String {
-        let g = Double(bytes) / 1_073_741_824
-        if g < 10 { return String(format: "%.1f ГБ", g) }
-        return String(format: "%.0f ГБ", g)
-    }
-
-    static func duration(_ seconds: TimeInterval) -> String {
-        // Never display zero before the absolute deadline; keep seconds visible above an hour.
-        guard seconds.isFinite, seconds <= CustomDuration.exactSeconds else { return "—" }
-        let total = Int(max(0, seconds).rounded(.up))
-        let h = total / 3600
-        let m = (total % 3600) / 60
-        let s = total % 60
-        if h > 0 { return "\(h) ч " + String(format: "%02d мин %02d с", m, s) }
-        if m > 0 { return String(format: "%d мин %02d с", m, s) }
-        return "\(s) с"
-    }
+    static func percent(_ value: Double) -> String { nespat_format_percent(value) as String }
+    static func gb(_ bytes: UInt64) -> String { nespat_format_memory(bytes) as String }
+    static func duration(_ seconds: TimeInterval) -> String { nespat_format_duration(seconds) as String }
 }
 
 // MARK: - Лог сторожа

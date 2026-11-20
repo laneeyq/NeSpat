@@ -36,12 +36,7 @@ enum HelperWire {
         return HelperHello(epoch:epoch,nonce:nonce)
     }
     static func requestData(_ value: Request) throws -> Data {
-        try value.validate()
-        var f: [String: Any] = ["version":1,"id":value.id.uuidString,"operation":value.operation.rawValue]
-        if let session = value.session { f["session"] = session.uuidString }
-        if let sequence = value.heartbeatSequence { f["heartbeatSequence"] = sequence }
-        if let minutes = value.minutes { f["minutes"] = minutes }
-        return try JSONSerialization.data(withJSONObject:f,options:[.sortedKeys])
+        try value.encoded()
     }
     static func operation(_ value: Request, epoch: UUID) throws -> Data {
         try JSONSerialization.data(withJSONObject:["version":1,"epoch":epoch.uuidString,
@@ -121,12 +116,7 @@ final class HandshakingPrivilegeEndpoint: NSObject, VerifiedPrivilegeRPC, @unche
         self.connection=connection; self.policy=policy; self.engine=engine; self.enrollment=enrollment
     }
     private func caller() -> NSXPCConnection? {
-        guard let c=connection, NSXPCConnection.current() === c, c.processIdentifier > 0,
-              c.effectiveUserIdentifier != 0, c.auditSessionIdentifier > 0 else { return nil }
-        if let installedClientUID {
-            guard c.effectiveUserIdentifier == installedClientUID,
-                  SystemOwnerLiveness.isInstalledGUI(pid: c.processIdentifier) else { return nil }
-        }
+        guard let c = connection, c.isCurrentClient(installedUID: installedClientUID) else { return nil }
         return c
     }
     func handshake(_ bytes: Data, reply: @escaping (Data) -> Void) {

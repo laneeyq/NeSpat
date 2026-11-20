@@ -8,18 +8,14 @@ enum CustomDuration {
         var errorDescription: String? { "Введите положительное целое число минут, представимое без переполнения и потери точности срока." }
     }
     static func seconds(_ text: String) throws -> TimeInterval {
-        guard !text.isEmpty, text.utf8.count <= String(Int.max).count,
-              text.utf8.allSatisfy({ (48...57).contains($0) }), let minutes = Int(text), minutes > 0 else { throw Invalid() }
-        let seconds = nespat_minutes_to_seconds(Int64(minutes))
+        var input = text
+        let seconds = input.withUTF8 { nespat_parse_minutes($0.baseAddress, $0.count) }
         guard seconds > 0 else { throw Invalid() }
         return Double(seconds)
     }
     static func deadline(seconds: TimeInterval, now: Date) throws -> Date {
-        let start = now.timeIntervalSinceReferenceDate
-        let end = start + seconds
-        guard seconds.isFinite, seconds > 0, seconds <= exactSeconds,
-              start.isFinite, end.isFinite, abs(end) <= exactSeconds, end > start,
-              abs((end - start) - seconds) <= max(start.ulp, end.ulp) else { throw Invalid() }
+        let end = nespat_deadline(now.timeIntervalSinceReferenceDate, seconds)
+        guard end.isFinite else { throw Invalid() }
         return Date(timeIntervalSinceReferenceDate: end)
     }
     static func validate(_ session: Session) throws {

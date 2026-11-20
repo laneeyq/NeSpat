@@ -154,7 +154,7 @@ final class NSXPCHelperChannel: HelperChannel, @unchecked Sendable {
         connection=NSXPCConnection(listenerEndpoint:endpoint); configure(policy)
     }
     private func configure(_ policy: SigningPolicy) {
-        connection.setCodeSigningRequirement(policy.helperRequirement)
+        connection.installRequirement(policy.helperRequirement)
         connection.remoteObjectInterface=NSXPCInterface(with:VerifiedPrivilegeRPC.self)
         connection.interruptionHandler={ [weak self] in self?.broken() }
         connection.invalidationHandler={ [weak self] in self?.broken() }

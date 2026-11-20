@@ -1,3 +1,4 @@
+import NeSpatNative
 import AppKit
 import MenuBarExtraAccess
 import SwiftUI
@@ -316,7 +317,7 @@ struct PanelView: View {
 
 struct PanelMetrics: View {
     @ViewState private var expanded = false
-    @ViewState private var details = BatteryDetails()
+    @ViewState private var details = NeSpatBatteryDetails(cycles: -1, design: -1, full: -1, remaining: -1)
     let sample: StatsSampler.Sample
     var lastReason: String? = nil
     var body: some View {
@@ -341,7 +342,7 @@ struct PanelMetrics: View {
             )
             Button {
                 expanded.toggle()
-                if expanded { details = BatteryDetails.read() }
+                if expanded { details = nespat_battery_details() }
             } label: {
             barRow(
                 expanded ? "Батарея ⌃" : "Батарея ⌄",
@@ -355,14 +356,8 @@ struct PanelMetrics: View {
                 .contentShape(Rectangle())
             }.buttonStyle(.plain).help("Показать циклы и ёмкость аккумулятора")
             if expanded {
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
-                    detail("Циклы", details.cycles, "")
-                    detail("Текущий заряд", details.remaining, " мА·ч")
-                    detail("Полная ёмкость", details.full, " мА·ч")
-                    detail("Проектная ёмкость", details.design, " мА·ч")
-                    detail("От проектной", details.health, "%")
-                }.font(.caption).foregroundStyle(.secondary)
-                .onChange(of: sample.batteryPercent) { details = BatteryDetails.read() }
+                BatteryDetailsPanel(details: details)
+                .onChange(of: sample.batteryPercent) { details = nespat_battery_details() }
             }
             if sample.isCharging == true || sample.isFullyCharged == true || sample.batteryMinutes != nil {
                 HStack {
@@ -382,13 +377,6 @@ struct PanelMetrics: View {
             }
         }
         .padding(.horizontal, 14)
-    }
-
-    private func detail(_ label: String, _ value: Int?, _ unit: String) -> some View {
-        GridRow {
-            Text(label)
-            Text(value.map { String($0) + unit } ?? "—").monospacedDigit()
-        }
     }
 
     /// Единая метрика: подпись + значение + тонкая шкала.

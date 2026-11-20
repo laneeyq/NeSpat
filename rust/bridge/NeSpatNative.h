@@ -66,3 +66,26 @@ int64_t nespat_preset_minutes(intptr_t index);
 bool nespat_journal_check(int32_t fd, bool directory, uint32_t owner);
 int32_t nespat_journal_read(int32_t directory, uint32_t owner, uint8_t *buffer, size_t capacity);
 bool nespat_journal_write(int32_t directory, uint32_t owner, const uint8_t *data, size_t size);
+void *nespat_battery_grid_create(NeSpatBatteryDetails details);
+void nespat_battery_grid_update(const void *grid, NeSpatBatteryDetails details);
+bool nespat_login_enabled(bool local_agent, bool installed_panel);
+bool nespat_login_set(bool on, bool local_agent, bool installed_panel);
+CFStringRef _Nonnull nespat_format_percent(double value) CF_RETURNS_RETAINED;
+CFStringRef _Nonnull nespat_format_memory(uint64_t bytes) CF_RETURNS_RETAINED;
+CFStringRef _Nonnull nespat_format_duration(double seconds) CF_RETURNS_RETAINED;
+int64_t nespat_parse_minutes(const uint8_t * _Nullable bytes, size_t length);
+double nespat_deadline(double start, double seconds);
+void nespat_xpc_pin(const void * _Nonnull connection, const void * _Nonnull requirement);
+void nespat_xpc_listener_pin(const void * _Nonnull listener, const void * _Nonnull requirement);
+bool nespat_xpc_root_reply(const void * _Nonnull connection);
+bool nespat_xpc_current_client(const void * _Nonnull connection, uint32_t installed_uid);
+#include <CoreFoundation/CFData.h>
+typedef struct {
+    uint8_t id[16], session[16];
+    int64_t minutes, sequence;
+    uint8_t operation;
+    bool has_session, has_minutes, has_sequence;
+} NeSpatRequest;
+bool nespat_valid_request(const NeSpatRequest * _Nonnull request);
+bool nespat_decode_request(const uint8_t * _Nullable bytes, size_t len, NeSpatRequest * _Nonnull request);
+CFDataRef _Nullable nespat_encode_request(const NeSpatRequest * _Nonnull request) CF_RETURNS_RETAINED;

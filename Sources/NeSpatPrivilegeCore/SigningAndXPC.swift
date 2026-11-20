@@ -33,7 +33,7 @@ public struct SigningPolicy: Sendable {
     // Listener-wide rejection occurs before the delegate; the per-message requirement
     // below remains mandatory too. Only anonymous/mach-service listeners support this.
     func requireClient(on listener: NSXPCListener) {
-        listener.setConnectionCodeSigningRequirement(guiRequirement)
+        listener.installRequirement(guiRequirement)
     }
 }
 
@@ -82,7 +82,7 @@ public final class PrivilegeListener: NSObject, NSXPCListenerDelegate {
         // No deployable listener in v7, even if someone instantiates this class manually.
         guard (PrivilegeDeployment.enabled || (local && geteuid() == 0)), connection.auditSessionIdentifier > 0,
               connection.effectiveUserIdentifier != 0 else { return false }
-        connection.setCodeSigningRequirement(policy.guiRequirement)
+        connection.installRequirement(policy.guiRequirement)
         connection.exportedInterface = NSXPCInterface(with: VerifiedPrivilegeRPC.self)
         let endpoint = HandshakingPrivilegeEndpoint(connection: connection, policy: policy, engine: engine, enrollment: enrollment, installedClientUID: installedClientUID)
         connection.exportedObject = endpoint
@@ -111,8 +111,7 @@ final class AuthenticatedPrivilegeEndpoint: NSObject, PrivilegeRPC, @unchecked S
     }
     func request(_ bytes: Data, reply: @escaping (Data) -> Void) {
         mutex.lock()
-        guard !closed, let connection, NSXPCConnection.current() === connection,
-              connection.effectiveUserIdentifier != 0, connection.auditSessionIdentifier > 0 else {
+        guard !closed, let connection, connection.isCurrentClient() else {
             mutex.unlock(); reply(Data(#"{"error":"denied-or-unconfirmed"}"#.utf8)); return
         }
         if endpoint == nil {
@@ -193,8 +192,30 @@ public enum PrivilegeClient {
     // can report default credentials; a real remote PID is also mandatory. This is only
     // a prepared guard: no live GUI client exists and root-positive validation is a gate.
     static func validateReplyPeer(_ connection: NSXPCConnection) throws {
-        guard connection.processIdentifier > 0, connection.effectiveUserIdentifier == 0 else {
+        guard nespat_xpc_root_reply(Unmanaged.passUnretained(connection).toOpaque()) else {
             connection.invalidate(); throw PrivilegeError.denied
+        }
+    }
+}
+
+extension NSXPCConnection {
+    func installRequirement(_ text: String) {
+        let requirement = text as NSString
+        withExtendedLifetime(requirement) {
+            nespat_xpc_pin(Unmanaged.passUnretained(self).toOpaque(), Unmanaged.passUnretained(requirement).toOpaque())
+        }
+    }
+    func isCurrentClient(installedUID: UInt32? = nil) -> Bool {
+        guard installedUID != 0 else { return false }
+        return nespat_xpc_current_client(Unmanaged.passUnretained(self).toOpaque(), installedUID ?? 0)
+    }
+}
+
+extension NSXPCListener {
+    func installRequirement(_ text: String) {
+        let requirement = text as NSString
+        withExtendedLifetime(requirement) {
+            nespat_xpc_listener_pin(Unmanaged.passUnretained(self).toOpaque(), Unmanaged.passUnretained(requirement).toOpaque())
         }
     }
 }

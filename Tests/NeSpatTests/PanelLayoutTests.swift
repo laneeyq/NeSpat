@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Testing
+import NeSpatNative
 @testable import NeSpat
 
 @Suite @MainActor struct PanelLayoutTests {
@@ -60,6 +61,22 @@ import Testing
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent(".build/production-panel.png")
         try #require(bitmap.representation(using: .png, properties: [:])).write(to: url)
+    }
+
+    @Test func expandedBatteryGridFitsPanelAndRefreshesMissingValues() throws {
+        let readings = NeSpatBatteryDetails(cycles: 123, design: 5000, full: 4750, remaining: 2375)
+        let raw = try #require(nespat_battery_grid_create(readings))
+        let grid = Unmanaged<NSGridView>.fromOpaque(raw).takeRetainedValue()
+        func values() -> [String?] {
+            (0..<grid.numberOfRows).map {
+                (grid.cell(atColumnIndex: 1, rowIndex: $0).contentView as? NSTextField)?.stringValue
+            }
+        }
+        #expect(grid.numberOfColumns == 2 && grid.numberOfRows == 5)
+        #expect(values() == ["123", "2375 мА·ч", "4750 мА·ч", "5000 мА·ч", "95%"])
+        #expect(grid.fittingSize.width > 0 && grid.fittingSize.width <= 272)
+        nespat_battery_grid_update(raw, .init(cycles: -1, design: -1, full: -1, remaining: -1))
+        #expect(values() == Array(repeating: "—", count: 5))
     }
 
     @Test func panelWindowShrinksAfterTransientRowDisappears() async throws {

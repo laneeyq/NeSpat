@@ -59,15 +59,8 @@ public enum SystemOwnerLiveness {
     // Called only inside authenticated RPC dispatch using the OS connection PID/UID.
     // A process that dies during capture may conservatively delay recovery; a PID alone
     // never proves ownership, and failure to capture cannot authorize enrollment.
-    static func isInstalledGUI(pid: Int32) -> Bool {
-        guard pid > 0 else { return false }
-        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
-        let count = proc_pidpath(pid, &path, UInt32(path.count))
-        guard count > 0, path.contains(0) else { return false }
-        return String(cString: path) == LocalTrustProfile.appPath + "/Contents/MacOS/NeSpat"
-    }
     static func capture(_ connection: NSXPCConnection, boot: UUID) -> OwnerProcessStamp? {
-        guard NSXPCConnection.current() === connection, connection.effectiveUserIdentifier != 0,
+        guard connection.isCurrentClient(),
               case .process(let stamp) = snapshot(pid: connection.processIdentifier, boot: boot),
               stamp.uid == connection.effectiveUserIdentifier, stamp.isValid else { return nil }
         return stamp

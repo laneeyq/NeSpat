@@ -188,9 +188,14 @@ mod observation;
 
 mod automatic;
 mod battery;
+mod battery_panel;
 mod duration_control;
+mod format;
 mod journal;
+mod login;
 mod recovery;
+mod request;
 mod setter;
 mod signing;
 mod status_item;
+mod xpc;

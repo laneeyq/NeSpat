@@ -18,45 +18,35 @@ public struct Request: Sendable {
         self.heartbeatSequence = heartbeatSequence
         self.id = id; self.operation = operation; self.session = session; self.minutes = minutes
     }
+    private static let operations: [Operation] = [.status, .begin, .changeDeadline, .end, .recover, .revoke, .heartbeat, .pollRecovery]
+
+    private var native: NeSpatRequest {
+        var r = NeSpatRequest()
+        r.id = id.uuid
+        r.operation = UInt8(Self.operations.firstIndex(of: operation) ?? 255)
+        if let session { r.has_session = true; r.session = session.uuid }
+        if let minutes { r.has_minutes = true; r.minutes = Int64(minutes) }
+        if let heartbeatSequence { r.has_sequence = true; r.sequence = Int64(heartbeatSequence) }
+        return r
+    }
     public static func decode(_ data: Data) throws -> Self {
-        guard data.count <= 4096, let fields = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(fields.keys).isSubset(of: ["version", "id", "operation", "session", "minutes", "heartbeatSequence"]),
-              let version = fields["version"] as? NSNumber, CFGetTypeID(version) != CFBooleanGetTypeID(), version.stringValue == "1",
-              let text = fields["id"] as? String, let id = UUID(uuidString: text),
-              let name = fields["operation"] as? String, let operation = Operation(rawValue: name) else { throw PrivilegeError.malformed }
-        // Wire format is canonical JSON: rejects duplicate keys and ambiguous encodings.
-        let canonical = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
-        guard canonical == data else { throw PrivilegeError.malformed }
-        var session: UUID?
-        if let value = fields["session"] {
-            guard let text = value as? String, let parsed = UUID(uuidString: text) else { throw PrivilegeError.malformed }
-            session = parsed
-        }
-        var minutes: Int?
-        if let value = fields["minutes"] {
-            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-                  let parsed = Int(number.stringValue), parsed > 0 else { throw PrivilegeError.malformed }
-            minutes = parsed
-        }
-        var sequence: Int?
-        if let value = fields["heartbeatSequence"] {
-            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-                  let parsed = Int(number.stringValue), parsed > 0 else { throw PrivilegeError.malformed }
-            sequence = parsed
-        }
-        let result = Self(id: id, operation: operation, session: session, minutes: minutes, heartbeatSequence: sequence)
-        try result.validate()
-        return result
+        var r = NeSpatRequest()
+        guard data.count <= 4096, data.withUnsafeBytes({
+            nespat_decode_request($0.bindMemory(to: UInt8.self).baseAddress, $0.count, &r)
+        }), operations.indices.contains(Int(r.operation)) else { throw PrivilegeError.malformed }
+        return Self(id: UUID(uuid: r.id), operation: operations[Int(r.operation)],
+                    session: r.has_session ? UUID(uuid: r.session) : nil,
+                    minutes: r.has_minutes ? Int(r.minutes) : nil,
+                    heartbeatSequence: r.has_sequence ? Int(r.sequence) : nil)
+    }
+    func encoded() throws -> Data {
+        var r = native
+        guard let bytes = nespat_encode_request(&r) else { throw PrivilegeError.malformed }
+        return bytes as Data
     }
     func validate() throws {
-        if let heartbeatSequence { guard operation == .heartbeat, heartbeatSequence > 0 else { throw PrivilegeError.malformed } }
-        switch operation {
-        case .status, .revoke: guard session == nil, minutes == nil else { throw PrivilegeError.malformed }
-        case .begin: guard session == nil else { throw PrivilegeError.malformed }
-        case .changeDeadline: guard session != nil else { throw PrivilegeError.malformed }
-        case .end, .recover, .heartbeat, .pollRecovery: guard session != nil, minutes == nil else { throw PrivilegeError.malformed }
-        }
-        if let minutes { _ = try Self.interval(minutes) }
+        var r = native
+        guard nespat_valid_request(&r) else { throw PrivilegeError.malformed }
     }
     static func interval(_ minutes: Int) throws -> Double {
         let seconds = nespat_minutes_to_seconds(Int64(minutes))

@@ -7,6 +7,29 @@ import Testing
     func canonical(_ fields: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
     }
+    @Test func rustRequestsMatchFoundationWireBytesForEveryOperation() throws {
+        let session = UUID()
+        let requests: [Request] = [
+            .init(operation: .status), .init(operation: .revoke),
+            .init(operation: .begin), .init(operation: .begin, minutes: 47),
+            .init(operation: .changeDeadline, session: session, minutes: 60),
+            .init(operation: .changeDeadline, session: session),
+            .init(operation: .end, session: session), .init(operation: .recover, session: session),
+            .init(operation: .heartbeat, session: session, heartbeatSequence: 17),
+            .init(operation: .pollRecovery, session: session)
+        ]
+        for r in requests {
+            var fields: [String: Any] = ["version": 1, "id": r.id.uuidString, "operation": r.operation.rawValue]
+            if let value = r.minutes { fields["minutes"] = value }
+            if let value = r.session { fields["session"] = value.uuidString }
+            if let value = r.heartbeatSequence { fields["heartbeatSequence"] = value }
+            let reference = try canonical(fields)
+            #expect(try r.encoded() == reference)
+            let decoded = try Request.decode(reference)
+            #expect(decoded.operation == r.operation && decoded.id == r.id && decoded.session == r.session)
+            #expect(decoded.minutes == r.minutes && decoded.heartbeatSequence == r.heartbeatSequence)
+        }
+    }
     @Test func strictSchemaRejectsCommandPathShellAndIdentityClaims() throws {
         let base: [String: Any] = ["version": 1, "id": UUID().uuidString, "operation": "status"]
         #expect(try Request.decode(canonical(base)).operation == .status)

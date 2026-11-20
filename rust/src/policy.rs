@@ -76,3 +76,42 @@ mod tests {
         assert_eq!(nespat_minutes_to_seconds(100_000), 6_000_000);
     }
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn nespat_parse_minutes(bytes: *const u8, len: usize) -> i64 {
+    if bytes.is_null() || len == 0 || len > 19 {
+        return 0;
+    }
+    let digits = std::slice::from_raw_parts(bytes, len);
+    if !digits.iter().all(u8::is_ascii_digit) {
+        return 0;
+    }
+    let minutes = digits.iter().try_fold(0i64, |acc, d| {
+        acc.checked_mul(10)?.checked_add(i64::from(*d - b'0'))
+    });
+    match minutes {
+        Some(value) => nespat_minutes_to_seconds(value),
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn nespat_deadline(start: f64, seconds: f64) -> f64 {
+    let limit = (1u64 << 53) as f64;
+    let end = start + seconds;
+    if !seconds.is_finite()
+        || seconds <= 0.0
+        || seconds > limit
+        || !start.is_finite()
+        || !end.is_finite()
+        || end.abs() > limit
+        || end <= start
+    {
+        return f64::NAN;
+    }
+    let ulp = |v: f64| v.abs().next_up() - v.abs();
+    if ((end - start) - seconds).abs() > ulp(start).max(ulp(end)) {
+        return f64::NAN;
+    }
+    end
+}

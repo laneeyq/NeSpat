@@ -30,6 +30,6 @@ public struct ExactCodePin: Sendable {
     }
     // Requirement validated at construction; must be set once, before activation.
     // UID/audit/connection/root checks and the existing transport are still mandatory.
-    func requirePeer(on connection: NSXPCConnection) { connection.setCodeSigningRequirement(requirement) }
-    func requireClients(on listener: NSXPCListener) { listener.setConnectionCodeSigningRequirement(requirement) }
+    func requirePeer(on connection: NSXPCConnection) { connection.installRequirement(requirement) }
+    func requireClients(on listener: NSXPCListener) { listener.installRequirement(requirement) }
 }

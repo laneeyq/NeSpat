@@ -3,7 +3,7 @@ import PackageDescription
 import Foundation
 
 let rustLib = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("rust/target/release").path
-let nativeLink: [LinkerSetting] = [.linkedFramework("Security"), .linkedFramework("AppKit"), .linkedFramework("SystemConfiguration"), .linkedFramework("IOKit"), .unsafeFlags(["-L" + rustLib])]
+let nativeLink: [LinkerSetting] = [.linkedFramework("ServiceManagement"), .linkedFramework("Security"), .linkedFramework("AppKit"), .linkedFramework("SystemConfiguration"), .linkedFramework("IOKit"), .unsafeFlags(["-L" + rustLib])]
 
 let package = Package(
     name: "NeSpat",
