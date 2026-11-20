@@ -315,6 +315,8 @@ struct PanelView: View {
 }
 
 struct PanelMetrics: View {
+    @ViewState private var expanded = false
+    @ViewState private var details = BatteryDetails()
     let sample: StatsSampler.Sample
     var lastReason: String? = nil
     var body: some View {
@@ -337,8 +339,12 @@ struct PanelMetrics: View {
                 fraction: memoryFraction,
                 fill: .load
             )
+            Button {
+                expanded.toggle()
+                if expanded { details = BatteryDetails.read() }
+            } label: {
             barRow(
-                "Батарея",
+                expanded ? "Батарея ⌃" : "Батарея ⌄",
                 sample.batteryPercent.map { p in
                     let src = StatsSampler.powerSourceText(sample.externalPowerConnected)
                     return "\(p)% · \(src)"
@@ -346,6 +352,27 @@ struct PanelMetrics: View {
                 fraction: sample.batteryPercent.map { CGFloat($0) / 100 },
                 fill: .battery(sample.batteryPercent ?? 100)
             )
+                .contentShape(Rectangle())
+            }.buttonStyle(.plain).help("Показать циклы и ёмкость аккумулятора")
+            if expanded {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 3) {
+                    detail("Циклы", details.cycles, "")
+                    detail("Текущий заряд", details.remaining, " мА·ч")
+                    detail("Полная ёмкость", details.full, " мА·ч")
+                    detail("Проектная ёмкость", details.design, " мА·ч")
+                    detail("От проектной", details.health, "%")
+                }.font(.caption).foregroundStyle(.secondary)
+                .onChange(of: sample.batteryPercent) { details = BatteryDetails.read() }
+            }
+            if sample.isCharging == true || sample.isFullyCharged == true || sample.batteryMinutes != nil {
+                HStack {
+                    if sample.isCharging == true { Text("Заряжается") }
+                    else if sample.isFullyCharged == true { Text("Заряжена") }
+                    if let minutes = sample.batteryMinutes {
+                        Text("\(sample.isCharging == true ? "До зарядки" : "Осталось") ≈ \(minutes / 60) ч \(minutes % 60) мин")
+                    }
+                }.font(.caption).foregroundStyle(.secondary)
+            }
             if let reason = lastReason {
                 Text(reason)
                     .font(.system(size: 11))
@@ -355,6 +382,13 @@ struct PanelMetrics: View {
             }
         }
         .padding(.horizontal, 14)
+    }
+
+    private func detail(_ label: String, _ value: Int?, _ unit: String) -> some View {
+        GridRow {
+            Text(label)
+            Text(value.map { String($0) + unit } ?? "—").monospacedDigit()
+        }
     }
 
     /// Единая метрика: подпись + значение + тонкая шкала.

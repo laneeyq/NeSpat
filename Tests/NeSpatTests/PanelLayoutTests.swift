@@ -67,26 +67,34 @@ import Testing
         readings.helper = true; readings.watchdog = true; readings.permitted = true
         readings.power = .enabled
         let mode = AutomaticModeModel(requested: false, start: false, save: { _ in })
-        let host = NSHostingView(rootView: ExclusivePanel(mode: mode, readings: readings))
-        host.sizingOptions = []
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 650),
+        let content = NSHostingController(rootView: ExclusivePanel(mode: mode, readings: readings))
+        content.sizingOptions = [.preferredContentSize]
+        let popover = NSPopover()
+        popover.contentViewController = content
+        let anchor = NSButton(title: "NeSpat", target: nil, action: nil)
+        let window = NSWindow(contentRect: NSRect(x: 40, y: 120, width: 140, height: 30),
                               styleMask: .borderless, backing: .buffered, defer: false)
-        window.contentView = host
+        window.contentView = anchor
+        window.orderBack(nil)
+        popover.animates = false
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+        defer { popover.close(); window.orderOut(nil) }
         func settle() async throws {
             for _ in 0..<6 {
-                host.layoutSubtreeIfNeeded()
+                content.view.layoutSubtreeIfNeeded()
                 try await Task.sleep(for: .milliseconds(15))
             }
         }
         try await settle()
-        let normal = window.frame
-        #expect(normal.height < 650)
+        let normal = popover.contentSize
+        #expect(normal.width == 300 && normal.height > 0)
         readings.power = .disabled
         try await settle()
-        #expect(window.frame.height > normal.height)
+        #expect(popover.contentSize.height > normal.height)
         readings.power = .enabled
         try await settle()
-        #expect(window.frame == normal)
+        #expect(abs(popover.contentSize.height - normal.height) <= 1)
+
     }
 
     private func render(_ model: AppModel, name: String, output: URL) throws {

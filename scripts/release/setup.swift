@@ -59,6 +59,28 @@ func verify(_ bundle: URL) throws {
 func install() throws {
     guard geteuid() == 0, CommandLine.arguments.last == "/" else { throw Failure("Требуется установка на загрузочный диск от администратора") }
     for path in ["/","/Library",parent.path,daemons.path] { try secureDirectory(URL(fileURLWithPath:path)) }
+    // The installed uninstaller owns the disable/restore/bootout sequence.
+    // It takes the same directory lock as install; invoke it before taking that lock.
+    if files.fileExists(atPath: base.path) {
+        try secureDirectory(base)
+        guard files.fileExists(atPath:base.appendingPathComponent("public-install-v1").path) else { throw Failure("Обнаружена другая установка NeSpat") }
+        let previousVersion = Bundle(url:app)?.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String
+        guard let previousVersion else { throw Failure("Версия установленного приложения неизвестна") }
+        if previousVersion.compare("1.1.0", options:.numeric) == .orderedAscending {
+            let settings = try run("/usr/bin/pmset", ["-g"])
+            guard settings.components(separatedBy:.newlines).contains(where: {
+                $0.split(whereSeparator: { $0.isWhitespace }) == ["SleepDisabled","0"]
+            }) else { throw Failure("Для обновления требуется подтверждённый обычный сон") }
+            let proc = try run("/bin/ps", ["-axo","comm="])
+            guard !proc.components(separatedBy:.newlines).contains(app.appendingPathComponent("Contents/MacOS/NeSpat").path) else {
+                throw Failure("Завершите сессию и выберите «Выход» в панели NeSpat перед обновлением")
+            }
+            let tool = base.appendingPathComponent("Uninstall")
+            var st = stat()
+            guard lstat(tool.path,&st) == 0, st.st_uid == 0, st.st_mode & S_IFMT == S_IFREG, st.st_mode & 0o022 == 0 else { throw Failure("Проверка прежнего деинсталлятора не прошла") }
+            try run(tool.path, ["--uninstall"])
+        }
+    }
     let fd = open(parent.path,O_RDONLY|O_DIRECTORY|O_NOFOLLOW)
     guard fd >= 0 else { throw Failure("Каталог установки недоступен") }; defer { close(fd) }
     guard flock(fd,LOCK_EX|LOCK_NB) == 0 else { throw Failure("Другая установка уже выполняется") }

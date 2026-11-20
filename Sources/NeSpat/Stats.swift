@@ -11,6 +11,9 @@ final class StatsSampler: @unchecked Sendable {
         var memUsedBytes: UInt64 = 0
         var memTotalBytes: UInt64 = 0
         var batteryPercent: Int?
+        var isCharging: Bool?
+        var isFullyCharged: Bool?
+        var batteryMinutes: Int?
         var batteryPercentExact: Double?
         var batteryLevel: Double? {
             if let exact = batteryPercentExact { return exact.isFinite && (0...100).contains(exact) ? exact : nil }
@@ -43,7 +46,7 @@ final class StatsSampler: @unchecked Sendable {
         var s = Sample()
         s.cpuPercent = cpuPercent()
         (s.memUsedBytes, s.memTotalBytes) = memory()
-        (s.batteryPercent, s.externalPowerConnected, s.batteryPercentExact) = battery()
+        readBattery(into: &s)
         s.temperatureC = TemperatureReader.chipTemperatureC()
         return s
     }
@@ -102,17 +105,25 @@ final class StatsSampler: @unchecked Sendable {
 
     // MARK: Батарея (IOPowerSources)
 
-    private func battery() -> (percent: Int?, externalPowerConnected: Bool?, exact: Double?) {
+    private func readBattery(into sample: inout Sample) {
         guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let list = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else {
-            return (nil, nil, nil)
+            return
         }
         for ps in list {
             guard let desc = IOPSGetPowerSourceDescription(blob, ps as CFTypeRef)?.takeUnretainedValue() as? [String: Any],
                   desc[kIOPSTypeKey] as? String == kIOPSInternalBatteryType else { continue }
-            return Self.parseBattery(desc)
+            (sample.batteryPercent, sample.externalPowerConnected, sample.batteryPercentExact) = Self.parseBattery(desc)
+            sample.isCharging = desc[kIOPSIsChargingKey] as? Bool
+            sample.isFullyCharged = desc[kIOPSIsChargedKey] as? Bool
+            let key = sample.isCharging == true ? kIOPSTimeToFullChargeKey : kIOPSTimeToEmptyKey
+            if sample.isCharging == true || sample.externalPowerConnected == false,
+               let minutes = desc[key] as? Int, minutes > 0 {
+                sample.batteryMinutes = minutes
+            }
+            return
         }
-        return (nil, nil, nil)
+        return
     }
     static func powerSourceText(_ external: Bool?) -> String {
         switch external {

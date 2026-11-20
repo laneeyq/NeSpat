@@ -1,5 +1,5 @@
 import AppKit
-import MenuBarExtraAccess
+import Combine
 import SwiftUI
 import NeSpatPrivilegeCore
 
@@ -12,6 +12,7 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
     @Published var permitted = false
     @Published var power = ObservedSleep.unknown
     private let sampler = StatsSampler()
+    private var sampling = false
     private var timer: Timer?
 
     init(poll: Bool = true) {
@@ -24,7 +25,17 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
     }
 
     private func refresh() {
-        sample = sampler.sample()
+        guard !sampling else { return }
+        sampling = true
+        Task {
+            let result = await Task.detached(priority: .utility) { [sampler] in sampler.sample() }.value
+            sample = result
+            refreshServiceStatus()
+            sampling = false
+        }
+    }
+
+    private func refreshServiceStatus() {
         power = SystemSleepObservation.read()
         let profile = try? LocalTrustProfile.load()
         permitted = profile?.currentlyEnabled == true
@@ -43,10 +54,18 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
 }
 
 @MainActor struct ExclusiveNeSpatApp: App {
-    @StateObject private var mode = AutomaticModeModel()
-    @StateObject private var readings = PanelReadings()
-    @PanelState private var presented = false
-    init() {
+    @NSApplicationDelegateAdaptor(StatusPanelController.self) private var controller
+    var body: some Scene { Settings { EmptyView() } }
+}
+
+@MainActor final class StatusPanelController: NSObject, NSApplicationDelegate {
+    private var item: NSStatusItem!
+    private let popover = NSPopover()
+    private var subscriptions = Set<AnyCancellable>()
+    private lazy var mode = AutomaticModeModel()
+    private lazy var readings = PanelReadings()
+
+    private func migrateDuration() {
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: "exclusive.durationChoice") == nil else { return }
         let previous = defaults.integer(forKey: "exclusive.durationMinutes")
@@ -70,29 +89,46 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
         default: return readings.power == .disabled ? warning : readings.menuTitle
         }
     }
-    var body: some Scene {
-        MenuBarExtra {
-            ExclusivePanel(mode: mode, readings: readings)
-        } label: {
-            Text(menuTitle)
-                .font(.system(size: 14)).monospacedDigit()
-                .frame(minWidth: 100, alignment: .leading)
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        migrateDuration()
+        Task { await ReleaseUpdates.shared.monitor() }
+        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.autosaveName = "local.nespat.statusItem.v2"
+        guard let button = item.button else { return }
+        button.target = self
+        button.action = #selector(togglePanel)
+        button.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        button.toolTip = "NeSpat"
+        button.title = menuTitle
+        let content = NSHostingController(rootView: ExclusivePanel(mode: mode, readings: readings))
+        content.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = content
+        popover.behavior = .transient
+        popover.animates = false
+        mode.objectWillChange.merge(with: readings.objectWillChange)
+            .receive(on: RunLoop.main).sink { [weak self] _ in
+                guard let self else { return }
+                self.item.button?.title = self.menuTitle
+            }.store(in: &subscriptions)
+    }
+    @objc private func togglePanel() {
+        if popover.isShown { popover.performClose(nil) }
+        else if let button = item.button {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
         }
-        .menuBarExtraAccess(isPresented: $presented) { item in
-            item.autosaveName = NSStatusItem.AutosaveName("local.nespat.statusItem.v2")
-            item.isVisible = true
-        }
-        .menuBarExtraStyle(.window)
     }
 }
 
 @MainActor struct ExclusivePanel: View {
+    @ObservedObject private var updates = ReleaseUpdates.shared
+    @AppStorage("updates.automatic") private var automaticUpdates = true
     @ObservedObject var mode: AutomaticModeModel
     @ObservedObject var readings: PanelReadings
     @AppStorage("exclusive.durationChoice") private var minutes = 60
     @AppStorage("exclusive.customMinutes") private var customMinutes = "30"
     @AppStorage("automaticMode.requested.v1") private var automatic = false
-    @PanelState private var login = LoginItem.isEnabled
+    @PanelState private var login = false
     @PanelState private var loginError: String?
     @PanelState private var draftMinutes = ""
     @PanelState private var durationError: String?
@@ -168,7 +204,7 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
             divider
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Автоматический режим", isOn: Binding(get: { automatic }, set: mode.setRequested))
-                    .disabled(!automatic && !canStart)
+                    .help("Начинать сессию выбранной длительности при запуске NeSpat")
                 HStack {
                     Toggle("Запускать при входе", isOn: Binding(get: { login }, set: { on in
                         let changed = LoginItem.setEnabled(on)
@@ -183,16 +219,25 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
                         }
                     }.buttonStyle(.borderless).foregroundStyle(.primary).keyboardShortcut("q")
                 }
+                HStack {
+                    Toggle("Автообновления", isOn: $automaticUpdates)
+                    Spacer()
+                    if let package = updates.package {
+                        Button("Установить") {
+                            if !mode.needsSafeQuit && SystemSleepObservation.read() == .enabled,
+                               NSWorkspace.shared.open(package) { NSApp.terminate(nil) }
+                        }.disabled(mode.needsSafeQuit || readings.power != .enabled)
+                    } else {
+                        Button("Проверить") { Task { await updates.check(manual: true) } }
+                    }
+                }
+                if let message = updates.message { Text(message).font(.caption).foregroundStyle(.secondary) }
                 if let loginError { Text(loginError).font(.system(size: 11)) }
-            }.toggleStyle(.checkbox).controlSize(.small).padding(.horizontal, 14).padding(.bottom, 2)
+            }.onAppear { login = LoginItem.isEnabled }.toggleStyle(.checkbox).controlSize(.small).padding(.horizontal, 14).padding(.bottom, 2)
         }
         .padding(.vertical, 8).frame(width: 300).fixedSize(horizontal: false, vertical: true)
         .font(.system(size: 13))
-        .background {
-            GeometryReader { geometry in
-                PanelWindowSize(height: geometry.size.height)
-            }
-        }
+
     }
 
     private func applyMinutes() {
@@ -257,32 +302,6 @@ private struct DurationPresets: NSViewRepresentable {
         @objc func pick(_ sender: NSSegmentedControl) {
             guard choices.indices.contains(sender.selectedSegment) else { return }
             selection.wrappedValue = choices[sender.selectedSegment].1
-        }
-    }
-}
-
-private struct PanelWindowSize: NSViewRepresentable {
-    let height: CGFloat
-    func makeNSView(context: Context) -> Probe { Probe() }
-    func updateNSView(_ view: Probe, context: Context) { view.schedule(height) }
-
-    final class Probe: NSView {
-        private var contentHeight: CGFloat = 0
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            schedule(contentHeight)
-        }
-        func schedule(_ height: CGFloat) {
-            contentHeight = height
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let window, height > 0, height == contentHeight else { return }
-                var frame = window.frame
-                let target = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: 300, height: ceil(height))).height
-                guard abs(target - frame.height) >= 1 else { return }
-                frame.origin.y = frame.maxY - target
-                frame.size.height = target
-                window.setFrame(frame, display: true)
-            }
         }
     }
 }
