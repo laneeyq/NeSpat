@@ -10,9 +10,24 @@ pub enum Assessment {
     LowDuringSession,
 }
 fn classify(battery: f64, ac: i8, temp: f64, thermal: i8, starting: bool) -> Assessment {
+    assess_readings(battery, ac, temp, thermal, Some(starting))
+}
+
+// Installing the monitor does not start a keep-awake session.
+pub(crate) fn installation_sensors_ready(battery: f64, ac: i8, temp: f64, thermal: i8) -> bool {
+    assess_readings(battery, ac, temp, thermal, None) == Assessment::Clear
+}
+
+fn assess_readings(
+    battery: f64,
+    ac: i8,
+    temp: f64,
+    thermal: i8,
+    session_start: Option<bool>,
+) -> Assessment {
     let battery_valid = (0.0..=100.0).contains(&battery);
     let temp_valid = temp > 0.0 && temp < 150.0;
-    if starting && ac == 0 && battery_valid && battery < 15.0 {
+    if session_start == Some(true) && ac == 0 && battery_valid && battery < 15.0 {
         return Assessment::LowAtStart;
     }
     if thermal == 1 {
@@ -21,7 +36,7 @@ fn classify(battery: f64, ac: i8, temp: f64, thermal: i8, starting: bool) -> Ass
     if temp_valid && temp >= 95.0 {
         return Assessment::Hot;
     }
-    if ac == 0 && battery_valid && battery <= 10.0 {
+    if session_start.is_some() && ac == 0 && battery_valid && battery <= 10.0 {
         return Assessment::LowDuringSession;
     }
     if !battery_valid || !temp_valid || !(0..=1).contains(&ac) || !(0..=1).contains(&thermal) {
@@ -49,6 +64,20 @@ pub extern "C" fn nespat_minutes_to_seconds(minutes: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn install_on_low_battery_keeps_session_limits_and_sensor_checks() {
+        for charge in [9., 11., 14.] {
+            assert!(installation_sensors_ready(charge, 0, 38., 0));
+            assert_eq!(classify(charge, 0, 38., 0, true), Assessment::LowAtStart);
+            assert!(!installation_sensors_ready(charge, 0, 95., 0));
+            assert!(!installation_sensors_ready(charge, 0, 38., 1));
+        }
+        assert!(!installation_sensors_ready(f64::NAN, 0, 38., 0));
+        assert!(!installation_sensors_ready(11., -1, 38., 0));
+        assert!(!installation_sensors_ready(11., 0, f64::NAN, 0));
+        assert!(!installation_sensors_ready(11., 0, 38., -1));
+        assert_eq!(classify(9., 0, 38., 0, false), Assessment::LowDuringSession);
+    }
     #[test]
     fn custom_input_preserves_supported_durations_and_rejects_malformed_values() {
         let parse = |text: &str| unsafe { nespat_parse_minutes(text.as_ptr(), text.len()) };

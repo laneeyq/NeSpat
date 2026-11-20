@@ -82,23 +82,23 @@ pub fn run(args: &[String]) -> Option<i32> {
         let idle = nespat_setter_idle();
         let sleep = nespat_sleep_disabled();
         println!("root read-only preflight: battery={}, AC={}, temperature={}, thermal={}, sleep={}, boot=true, setupEnabled={}, setterIdle={idle}",battery.percent.is_finite(),battery.external>=0,temp.is_finite(),thermal,match sleep{0=>"enabled",1=>"disabled",_=>"unknown"},nespat_profile_enabled(&h.profile));
-        return Some(
-            if idle
-                && sleep == 0
-                && nespat_continuous_seconds().is_finite()
-                && crate::policy::nespat_assess(
-                    battery.percent,
-                    battery.external,
-                    temp,
-                    thermal,
-                    true,
-                ) == 0
-            {
-                0
-            } else {
-                2
-            },
-        );
+        let result = if idle
+            && sleep == 0
+            && nespat_continuous_seconds().is_finite()
+            && crate::policy::installation_sensors_ready(
+                battery.percent,
+                battery.external,
+                temp,
+                thermal,
+            ) {
+            0
+        } else {
+            2
+        };
+        if result != 0 {
+            eprintln!("Preflight failed: setter_idle={idle}, sleep={sleep}, charge={}, external={}, temperature={temp}, thermal={thermal}",battery.percent,battery.external);
+        }
+        return Some(result);
     }
     if !h.profile.exclusive() {
         return None;
