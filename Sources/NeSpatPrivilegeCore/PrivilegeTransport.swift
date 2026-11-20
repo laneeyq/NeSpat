@@ -147,16 +147,15 @@ final class NSXPCHelperChannel: HelperChannel, @unchecked Sendable {
     private let mutex=NSLock()
     private var closed=false
     private var failure: (@Sendable () -> Void)?
-    init(policy: SigningPolicy) {
-        connection=NSXPCConnection(machServiceName:SigningPolicy.machService,options:.privileged)
-        configure(policy)
-    }
-    init(endpoint: NSXPCListenerEndpoint, policy: SigningPolicy) {
-        connection=NSXPCConnection(listenerEndpoint:endpoint); configure(policy)
-    }
-    private func configure(_ policy: SigningPolicy) {
-        connection.installRequirement(policy.helperRequirement)
-        connection.remoteObjectInterface=NSXPCInterface(with:VerifiedPrivilegeRPC.self)
+    convenience init(policy: SigningPolicy) { self.init(destination: nil, policy: policy) }
+    convenience init(endpoint: NSXPCListenerEndpoint, policy: SigningPolicy) { self.init(destination: endpoint, policy: policy) }
+    private init(destination: NSXPCListenerEndpoint?, policy: SigningPolicy) {
+        let requirement = policy.helperRequirement as NSString
+        let raw = withExtendedLifetime((requirement, destination)) {
+            nespat_xpc_open(Unmanaged.passUnretained(requirement).toOpaque(),
+                            destination.map { UnsafeRawPointer(Unmanaged.passUnretained($0).toOpaque()) })
+        }
+        connection = Unmanaged<NSXPCConnection>.fromOpaque(raw).takeRetainedValue()
         connection.interruptionHandler={ [weak self] in self?.broken() }
         connection.invalidationHandler={ [weak self] in self?.broken() }
     }
@@ -170,22 +169,13 @@ final class NSXPCHelperChannel: HelperChannel, @unchecked Sendable {
     private func exchange(_ bytes: Data, hello: Bool, reply: @escaping @Sendable (Result<HelperChannelReply,PrivilegeTransportError>) -> Void) {
         mutex.lock(); let allowed = !closed; mutex.unlock()
         guard allowed else { reply(.failure(.closed)); return }
-        guard let proxy=connection.remoteObjectProxyWithErrorHandler({ _ in reply(.failure(.connection)) }) as? VerifiedPrivilegeRPC else {
-            reply(.failure(.connection)); return
-        }
-        let received: (Data) -> Void = { [weak self] data in
+        nespat_xpc_exchange(Unmanaged.passUnretained(connection).toOpaque(), bytes as CFData, hello) { [weak self] data, pid, uid, error in
             guard let self else { reply(.failure(.closed)); return }
-            self.mutex.lock(); let allowed = !self.closed; self.mutex.unlock()
-            guard allowed else { reply(.failure(.closed)); return }
-            do {
-                // Reached only after Foundation checks helperRequirement on this reply.
-                // OS credentials are never taken from the helper's Data payload.
-                try PrivilegeClient.validateReplyPeer(self.connection)
-                reply(.success(HelperChannelReply(bytes:data,peer:HelperPeerCredentials(
-                    pid:self.connection.processIdentifier,euid:self.connection.effectiveUserIdentifier))))
-            } catch { reply(.failure(.authentication)) }
+            self.mutex.lock(); let usable = !self.closed; self.mutex.unlock()
+            guard usable else { reply(.failure(.closed)); return }
+            guard error == 0, let data else { reply(.failure(error == 2 ? .authentication : .connection)); return }
+            reply(.success(HelperChannelReply(bytes: data as Data, peer: HelperPeerCredentials(pid: pid, euid: uid))))
         }
-        if hello { proxy.handshake(bytes,reply:received) } else { proxy.request(bytes,reply:received) }
     }
     func handshake(_ bytes: Data, reply: @escaping @Sendable (Result<HelperChannelReply,PrivilegeTransportError>) -> Void) {
         exchange(bytes,hello:true,reply:reply)

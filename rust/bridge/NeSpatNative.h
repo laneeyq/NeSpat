@@ -147,3 +147,7 @@ void nespat_profile_drop(NeSpatProfile * _Nonnull profile);
 bool nespat_profile_enabled(const NeSpatProfile * _Nonnull profile);
 bool nespat_profile_host(const NeSpatProfile * _Nonnull profile);
 CFStringRef _Nonnull nespat_profile_hash(const NeSpatProfile * _Nonnull profile, bool helper) CF_RETURNS_RETAINED;
+void * _Nonnull nespat_xpc_open(const void * _Nonnull requirement, const void * _Nullable endpoint);
+void nespat_xpc_exchange(const void * _Nonnull conn, CFDataRef _Nonnull bytes, bool hello,
+                         void (^ _Nonnull completion)(CFDataRef _Nullable data, int32_t pid, uint32_t uid, uint8_t error));
+void nespat_xpc_export(const void * _Nonnull connection, const void * _Nonnull endpoint, const void * _Nonnull requirement);

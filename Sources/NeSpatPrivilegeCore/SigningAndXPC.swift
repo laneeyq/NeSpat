@@ -82,10 +82,12 @@ public final class PrivilegeListener: NSObject, NSXPCListenerDelegate {
         // No deployable listener in v7, even if someone instantiates this class manually.
         guard (PrivilegeDeployment.enabled || (local && geteuid() == 0)), connection.auditSessionIdentifier > 0,
               connection.effectiveUserIdentifier != 0 else { return false }
-        connection.installRequirement(policy.guiRequirement)
-        connection.exportedInterface = NSXPCInterface(with: VerifiedPrivilegeRPC.self)
         let endpoint = HandshakingPrivilegeEndpoint(connection: connection, policy: policy, engine: engine, enrollment: enrollment, installedClientUID: installedClientUID)
-        connection.exportedObject = endpoint
+        let requirement = policy.guiRequirement as NSString
+        withExtendedLifetime(requirement) {
+            nespat_xpc_export(Unmanaged.passUnretained(connection).toOpaque(), Unmanaged.passUnretained(endpoint).toOpaque(),
+                              Unmanaged.passUnretained(requirement).toOpaque())
+        }
         connection.invalidationHandler = { endpoint.close() }
         connection.interruptionHandler = { endpoint.close() }
         connection.activate()

@@ -6,7 +6,8 @@ publish = false
 
 [dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSBundle", "NSURL", "NSArray", "NSError", "NSObject", "NSXPCConnection", "NSData", "NSJSONSerialization", "libc"] }
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSBundle", "NSURL", "NSArray", "NSError", "NSObject", "NSXPCConnection", "NSData", "NSJSONSerialization", "block2", "libc"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSAlert", "NSApplication", "NSRunningApplication", "NSWorkspace", "NSStatusItem", "NSStatusBar", "NSStatusBarButton", "NSButton", "NSControl", "NSFont", "NSFontDescriptor", "NSView", "NSViewController", "NSWindow", "NSPopover", "NSGridView", "NSTextField", "NSColor", "NSSegmentedControl", "NSCell", "NSLayoutConstraint", "NSAttributedString", "NSStringDrawing", "objc2-core-foundation"] }
 objc2-service-management = { version = "0.3", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
 serde = "1"
