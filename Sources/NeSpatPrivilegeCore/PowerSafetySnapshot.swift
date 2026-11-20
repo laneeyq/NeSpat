@@ -1,4 +1,5 @@
 import Foundation
+import NeSpatNative
 
 /// Independent server readings, never decoded from RPC or supplied as client claims.
 /// Unknown sensors stay unknown; thresholds are shared with the existing GUI policy.
@@ -16,26 +17,28 @@ public struct PowerSafetySnapshot: Sendable {
         self.thermalObservation = thermalSerious
     }
     public enum Assessment: Equatable, Sendable { case confirmedDanger, noDangerDetected, unknown }
-    // Classification only: does not silently change activation/recovery policy.
-    public var activationAssessment: Assessment {
-        if activationRefusalReason != nil { return .confirmedDanger }
-        return incomplete ? .unknown : .noDangerDetected
+    private func decision(starting: Bool) -> UInt8 {
+        nespat_assess(batteryPercent ?? .nan, externalPowerConnected.map { $0 ? 1 : 0 } ?? -1,
+                      temperatureC ?? .nan, thermalObservation.map { $0 ? 1 : 0 } ?? -1, starting)
     }
-    public var emergencyAssessment: Assessment {
-        if emergencyReason != nil { return .confirmedDanger }
-        return incomplete ? .unknown : .noDangerDetected
+    private func assessment(starting: Bool) -> Assessment {
+        switch decision(starting: starting) {
+        case 0: return .noDangerDetected
+        case 2...5: return .confirmedDanger
+        default: return .unknown
+        }
     }
-    private var incomplete: Bool {
-        batteryPercent == nil || externalPowerConnected == nil || temperatureC == nil || thermalObservation == nil
-    }
-    public var activationRefusalReason: String? {
-        if let p = batteryPercent, externalPowerConnected == false, p < 15 { return "заряд \(Int(p.rounded()))%" }
-        return emergencyReason
-    }
-    public var emergencyReason: String? {
-        if thermalSerious { return "перегрев (thermal state)" }
-        if let t = temperatureC, t >= 95 { return "температура \(Int(t.rounded()))°" }
-        if let p = batteryPercent, externalPowerConnected == false, p <= 10 { return "заряд \(Int(p.rounded()))% без внешнего питания" }
-        return nil
+    public var activationAssessment: Assessment { assessment(starting: true) }
+    public var emergencyAssessment: Assessment { assessment(starting: false) }
+    public var activationRefusalReason: String? { reason(starting: true) }
+    public var emergencyReason: String? { reason(starting: false) }
+    private func reason(starting: Bool) -> String? {
+        switch decision(starting: starting) {
+        case 2: return "перегрев (thermal state)"
+        case 3: return temperatureC.map { "температура \(Int($0.rounded()))°" }
+        case 4: return batteryPercent.map { "заряд \(Int($0.rounded()))%" }
+        case 5: return batteryPercent.map { "заряд \(Int($0.rounded()))% без внешнего питания" }
+        default: return nil
+        }
     }
 }

@@ -1,5 +1,6 @@
 import Foundation
 import IOKit
+import NeSpatNative
 import IOKit.ps
 import MachO
 
@@ -28,7 +29,9 @@ final class StatsSampler: @unchecked Sendable {
         var temperatureC: Double?
     }
 
-    private var prevTicks: [UInt32]?
+    private let sampler = nespat_sampler_create()
+    private let samplerLock = NSLock()
+    deinit { nespat_sampler_destroy(sampler) }
     private let totalMemory: UInt64
     private let pageSize: UInt64
 
@@ -54,23 +57,10 @@ final class StatsSampler: @unchecked Sendable {
     // MARK: CPU (host_processor_info, разница замеров)
 
     private func cpuPercent() -> Double? {
-        var numCpus: natural_t = 0
-        var info: processor_info_array_t?
-        var count: mach_msg_type_number_t = 0
-        let kr = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &numCpus, &info, &count)
-        guard kr == KERN_SUCCESS, let info else { return nil }
-        defer {
-            vm_deallocate(
-                mach_task_self_,
-                vm_address_t(bitPattern: info),
-                vm_size_t(count) * vm_size_t(MemoryLayout<integer_t>.stride)
-            )
+        samplerLock.withLock {
+            let percent = nespat_sampler_cpu(sampler)
+            return percent.isFinite ? percent : nil
         }
-
-        guard Int(count) >= Int(numCpus) * Int(CPU_STATE_MAX) else { return nil }
-        let current = (0..<Int(numCpus) * Int(CPU_STATE_MAX)).map { UInt32(bitPattern: info[$0]) }
-        defer { prevTicks = current }
-        return Self.cpuUsage(current: current, previous: prevTicks)
     }
 
     /// Kernel ticks are wrapping unsigned 32-bit counters, despite the integer_t pointer type.
@@ -91,16 +81,7 @@ final class StatsSampler: @unchecked Sendable {
     // MARK: Память (host_statistics64)
 
     private func memory() -> (used: UInt64, total: UInt64) {
-        var stats = vm_statistics64()
-        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
-        let kr = withUnsafeMutablePointer(to: &stats) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
-            }
-        }
-        guard kr == KERN_SUCCESS else { return (0, totalMemory) }
-        let used = (UInt64(stats.active_count) + UInt64(stats.wire_count) + UInt64(stats.compressor_page_count)) * pageSize
-        return (used, totalMemory)
+        (nespat_used_memory(pageSize), totalMemory)
     }
 
     // MARK: Батарея (IOPowerSources)
@@ -175,7 +156,7 @@ enum TemperatureReader {
     /// Максимум выбранных PMU tdie channels, номинально °C; private mapping/calibration не гарантированы Apple.
     /// nil, если подходящие данные недоступны; это не доказательство безопасной температуры.
     static func chipTemperatureC() -> Double? {
-        chipTemperatureC(from: sensors())
+        validCelsius(nespat_chip_temperature())
     }
 
     static func validCelsius(_ value: Double?) -> Double? {

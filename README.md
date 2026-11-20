@@ -64,7 +64,7 @@ sudo "/Library/Application Support/NeSpatPrivileged/Uninstall" --uninstall
 <details>
 <summary><strong>Сборка из исходников</strong></summary>
 
-На Mac с Apple Silicon и инструментами Swift 6 выполни из корня проекта:
+На Mac с Apple Silicon и инструментами Swift 6 и Rust 1.94 (rustup) выполни из корня проекта:
 
 ```sh
 bash scripts/test.sh

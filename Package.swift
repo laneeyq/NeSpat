@@ -1,5 +1,9 @@
 // swift-tools-version: 6.0
 import PackageDescription
+import Foundation
+
+let rustLib = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("rust/target/release").path
+let nativeLink: [LinkerSetting] = [.linkedFramework("AppKit"), .linkedFramework("SystemConfiguration"), .linkedFramework("IOKit"), .unsafeFlags(["-L" + rustLib])]
 
 let package = Package(
     name: "NeSpat",
@@ -8,17 +12,19 @@ let package = Package(
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", from: "1.2.2")
     ],
     targets: [
+        .systemLibrary(name: "NeSpatNative", path: "rust/bridge"),
         .executableTarget(
             name: "NeSpat",
             dependencies: [
+                "NeSpatNative",
                 "NeSpatPrivilegeCore",
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess")
             ],
-            path: "Sources/NeSpat"
+            path: "Sources/NeSpat", linkerSettings: nativeLink
         ),
         .testTarget(name: "NeSpatTests", dependencies: ["NeSpat"]),
-        .target(name: "NeSpatPrivilegeCore"),
-        .executableTarget(name: "NeSpatPrivilegeHelper", dependencies: ["NeSpatPrivilegeCore"]),
+        .target(name: "NeSpatPrivilegeCore", dependencies: ["NeSpatNative"], linkerSettings: nativeLink),
+        .executableTarget(name: "NeSpatPrivilegeHelper", dependencies: ["NeSpatPrivilegeCore", "NeSpatNative"], linkerSettings: nativeLink),
         .executableTarget(name: "NeSpatAcceptanceHelper", dependencies: ["NeSpatPrivilegeCore"]),
         .target(name: "NeSpatLiveTestCore", dependencies: ["NeSpatPrivilegeCore"]),
         .executableTarget(name: "NeSpatLiveTestHelper", dependencies: ["NeSpatLiveTestCore"]),

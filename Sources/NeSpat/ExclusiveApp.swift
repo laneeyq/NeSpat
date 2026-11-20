@@ -1,3 +1,4 @@
+import NeSpatNative
 import AppKit
 import Combine
 import SwiftUI
@@ -59,8 +60,7 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
 }
 
 @MainActor final class StatusPanelController: NSObject, NSApplicationDelegate {
-    private var item: NSStatusItem!
-    private let popover = NSPopover()
+    private var item: UnsafeMutableRawPointer?
     private var subscriptions = Set<AnyCancellable>()
     private lazy var mode = AutomaticModeModel()
     private lazy var readings = PanelReadings()
@@ -92,31 +92,19 @@ private typealias PanelState<Value> = SwiftUI.State<Value>
     func applicationDidFinishLaunching(_ notification: Notification) {
         migrateDuration()
         Task { await ReleaseUpdates.shared.monitor() }
-        item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.autosaveName = "local.nespat.statusItem.v2"
-        guard let button = item.button else { return }
-        button.target = self
-        button.action = #selector(togglePanel)
-        button.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-        button.toolTip = "NeSpat"
-        button.title = menuTitle
         let content = NSHostingController(rootView: ExclusivePanel(mode: mode, readings: readings))
         content.sizingOptions = [.preferredContentSize]
-        popover.contentViewController = content
-        popover.behavior = .transient
-        popover.animates = false
+        item = nespat_status_create(Unmanaged.passUnretained(content).toOpaque())
+        nespat_status_title(item, menuTitle)
         mode.objectWillChange.merge(with: readings.objectWillChange)
             .receive(on: RunLoop.main).sink { [weak self] _ in
                 guard let self else { return }
-                self.item.button?.title = self.menuTitle
+                nespat_status_title(self.item, self.menuTitle)
             }.store(in: &subscriptions)
     }
-    @objc private func togglePanel() {
-        if popover.isShown { popover.performClose(nil) }
-        else if let button = item.button {
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
-        }
+    func applicationWillTerminate(_ notification: Notification) {
+        nespat_status_destroy(item)
+        item = nil
     }
 }
 

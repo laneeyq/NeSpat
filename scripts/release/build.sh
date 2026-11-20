@@ -10,6 +10,8 @@ mkdir -p "$stage/scripts" "$stage/image" "$stage/pkg" "$stage/resources"
 flags=(--cache-path "$PWD/.build/cache" --config-path "$PWD/.build/config" --security-path "$PWD/.build/security")
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 map=(-Xswiftc -file-prefix-map -Xswiftc "$PWD=NeSpat" -Xswiftc -debug-prefix-map -Xswiftc "$PWD=NeSpat")
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$PWD=NeSpat --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=cargo --remap-path-prefix=$HOME=home"
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release --lib --bins --manifest-path rust/Cargo.toml
 for target in NeSpat NeSpatPrivilegeHelper; do
     swift build -c release --product "$target" "${flags[@]}" "${map[@]}"
 done
@@ -18,6 +20,8 @@ app="$stage/NeSpat.app"
 mkdir -p "$app/Contents/"{MacOS,Library/Helpers,Resources}
 cp "$bin/NeSpat" "$app/Contents/MacOS/"
 cp "$bin/NeSpatPrivilegeHelper" "$app/Contents/Library/Helpers/"
+cp rust/target/release/check-update "$app/Contents/Library/Helpers/check-update"
+codesign -fs - --options runtime "$app/Contents/Library/Helpers/check-update"
 cp Resources/AppIcon.icns LICENSE "$app/Contents/Resources/"
 cp .build/checkouts/MenuBarExtraAccess/LICENSE "$app/Contents/Resources/MenuBarExtraAccess-LICENSE"
 cp Resources/Info.plist "$app/Contents/"
@@ -28,7 +32,7 @@ codesign -fs - --options runtime --identifier local.nespat.privilege-helper "$he
 codesign -fs - --options runtime --identifier local.nespat.app "$app"
 pin() { codesign -dv --verbose=4 "$1" 2>&1 | awk -F= '/^CDHash=/{print $2}'; }
 printf '{"guiHash":"%s","helperHash":"%s"}\n' "$(pin "$app")" "$(pin "$helper")" > "$stage/scripts/pins.json"
-xcrun swiftc -O -target arm64-apple-macos14.0 -file-prefix-map "$PWD=NeSpat" scripts/release/setup.swift -o "$stage/scripts/setup"
+cp rust/target/release/setup "$stage/scripts/setup"
 strip -S -x "$stage/scripts/setup"
 codesign -fs - --options runtime "$stage/scripts/setup"
 "$stage/scripts/setup" --verify "$app"
@@ -43,7 +47,7 @@ plutil -replace CFBundleIdentifier -string local.nespat.launcher "$launcher/Info
 plutil -replace CFBundleDisplayName -string NeSpat "$launcher/Info.plist"
 plutil -replace CFBundleShortVersionString -string 1.1.0 "$launcher/Info.plist"
 cp Resources/AppIcon.icns "$launcher/Resources/"
-xcrun swiftc -O -target arm64-apple-macos14.0 -file-prefix-map "$PWD=NeSpat" scripts/release/Launcher.swift -o "$launcher/MacOS/NeSpat"
+cp rust/target/release/launcher "$launcher/MacOS/NeSpat"
 productbuild --distribution scripts/release/distribution.xml --resources "$stage/resources" --package-path "$stage/pkg" "$launcher/Resources/Services.pkg"
 cp "$launcher/Resources/Services.pkg" "$out/NeSpat-Update.pkg"
 codesign -fs - --options runtime "$stage/image/NeSpat.app"

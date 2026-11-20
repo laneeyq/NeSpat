@@ -1,5 +1,6 @@
 import Foundation
 import IOKit
+import NeSpatNative
 import IOKit.ps
 import MachO
 
@@ -164,7 +165,7 @@ enum TemperatureReader {
     /// Максимум выбранных PMU tdie channels, номинально °C; private mapping/calibration не гарантированы Apple.
     /// nil, если подходящие данные недоступны; это не доказательство безопасной температуры.
     static func chipTemperatureC() -> Double? {
-        chipTemperatureC(from: sensors())
+        validCelsius(nespat_chip_temperature())
     }
 
     static func validCelsius(_ value: Double?) -> Double? {

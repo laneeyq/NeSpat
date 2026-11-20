@@ -1,4 +1,5 @@
 import Foundation
+import NeSpatNative
 
 enum CustomDuration {
     // Binary64 represents all integer seconds through 2^53 exactly.
@@ -9,8 +10,8 @@ enum CustomDuration {
     static func seconds(_ text: String) throws -> TimeInterval {
         guard !text.isEmpty, text.utf8.count <= String(Int.max).count,
               text.utf8.allSatisfy({ (48...57).contains($0) }), let minutes = Int(text), minutes > 0 else { throw Invalid() }
-        let (seconds, overflow) = minutes.multipliedReportingOverflow(by: 60)
-        guard !overflow, Double(seconds) <= exactSeconds else { throw Invalid() }
+        let seconds = nespat_minutes_to_seconds(Int64(minutes))
+        guard seconds > 0 else { throw Invalid() }
         return Double(seconds)
     }
     static func deadline(seconds: TimeInterval, now: Date) throws -> Date {

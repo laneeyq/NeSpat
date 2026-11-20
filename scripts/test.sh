@@ -2,6 +2,8 @@
 # Reproducible safe tests, including CLT installations whose SwiftPM omits TestingMacros.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release --lib --manifest-path rust/Cargo.toml
+cargo test --locked --manifest-path rust/Cargo.toml
 export CLANG_MODULE_CACHE_PATH="$PWD/.build/module-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$CLANG_MODULE_CACHE_PATH"
 FLAGS=(--cache-path "$PWD/.build/cache" --config-path "$PWD/.build/config" --security-path "$PWD/.build/security")

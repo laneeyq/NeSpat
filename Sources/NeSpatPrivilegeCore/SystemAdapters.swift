@@ -1,3 +1,4 @@
+import NeSpatNative
 import Foundation
 import CoreFoundation
 import Darwin
@@ -6,11 +7,11 @@ import IOKit
 /// Read-only, independent observation. No pmset fallback and no inference from a setter's exit.
 public enum SystemSleepObservation {
     public static func read() -> ObservedSleep {
-        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
-        guard service != 0 else { return .unknown }
-        defer { IOObjectRelease(service) }
-        return decode(IORegistryEntryCreateCFProperty(service, "SleepDisabled" as CFString,
-                                                      kCFAllocatorDefault, 0)?.takeRetainedValue())
+        switch nespat_sleep_disabled() {
+        case 0: .enabled
+        case 1: .disabled
+        default: .unknown
+        }
     }
     static func decode(_ value: CFTypeRef?) -> ObservedSleep {
         guard let value else { return .unknown }

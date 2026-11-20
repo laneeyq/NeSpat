@@ -1,4 +1,5 @@
 import Foundation
+import NeSpatNative
 import CoreFoundation
 
 public enum PrivilegeError: Error, Equatable { case blocked, denied, malformed, replay, busy, journal, unknownPower, ownership, interference, unconfirmed }
@@ -58,8 +59,8 @@ public struct Request: Sendable {
         if let minutes { _ = try Self.interval(minutes) }
     }
     static func interval(_ minutes: Int) throws -> Double {
-        let (seconds, overflow) = minutes.multipliedReportingOverflow(by: 60)
-        guard minutes > 0, !overflow, Double(seconds) <= 9_007_199_254_740_992 else { throw PrivilegeError.malformed }
+        let seconds = nespat_minutes_to_seconds(Int64(minutes))
+        guard seconds > 0 else { throw PrivilegeError.malformed }
         return Double(seconds)
     }
     func deadline(now: Date) throws -> Date? {

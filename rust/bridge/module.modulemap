@@ -1,0 +1,5 @@
+module NeSpatNative {
+    header "NeSpatNative.h"
+    link "nespat_core"
+    export *
+}

@@ -1,5 +1,5 @@
 import Foundation
-import IOKit
+import NeSpatNative
 
 struct BatteryDetails {
     var cycles: Int?
@@ -12,19 +12,9 @@ struct BatteryDetails {
     }
 
     static func read() -> Self {
-        let device = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
-        guard device != 0 else { return Self() }
-        defer { IOObjectRelease(device) }
-        func read(_ key: String) -> Any? {
-            IORegistryEntryCreateCFProperty(device, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
-        }
-        let data = read("BatteryData") as? [String: Any] ?? [:]
-        func number(_ key: String, minimum: Int = 1) -> Int? {
-            guard let value = (read(key) ?? data[key]) as? Int, value >= minimum else { return nil }
-            return value
-        }
-        return Self(cycles: number("CycleCount", minimum: 0), design: number("DesignCapacity"),
-                    full: number("NominalChargeCapacity") ?? number("AppleRawMaxCapacity"),
-                    remaining: number("AppleRawCurrentCapacity", minimum: 0))
+        let sample = nespat_battery_details()
+        func value(_ raw: Int64) -> Int? { raw >= 0 ? Int(exactly: raw) : nil }
+        return Self(cycles: value(sample.cycles), design: value(sample.design),
+                    full: value(sample.full), remaining: value(sample.remaining))
     }
 }
