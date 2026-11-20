@@ -3,8 +3,8 @@ use objc2::{
     define_class, msg_send, rc::Retained, sel, DefinedClass, MainThreadMarker, MainThreadOnly,
 };
 use objc2_app_kit::{
-    NSFont, NSPopover, NSPopoverBehavior, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
-    NSViewController,
+    NSFont, NSPopover, NSPopoverBehavior, NSStatusBar, NSStatusBarButton, NSStatusItem,
+    NSVariableStatusItemLength, NSViewController,
 };
 use objc2_foundation::{NSObject, NSRectEdge, NSString};
 use std::{
@@ -25,12 +25,12 @@ define_class!(
 
     impl NeSpatStatusTarget {
         #[unsafe(method(toggleNeSpatPanel:))]
-        fn toggle(&self, _sender: &NSObject) {
+        fn toggle(&self, button: &NSStatusBarButton) {
             let panel = self.ivars();
             if panel.popover.isShown() {
                 unsafe { panel.popover.performClose(None); }
-            } else if let Some(button) = panel.item.button(self.mtm()) {
-                panel.popover.showRelativeToRect_ofView_preferredEdge(button.bounds(), &button, NSRectEdge::MinY);
+            } else {
+                panel.popover.showRelativeToRect_ofView_preferredEdge(button.bounds(), button, NSRectEdge::MinY);
                 if let Some(window) = panel.popover.contentViewController().and_then(|vc| vc.view().window()) {
                     window.makeKeyWindow();
                 }
