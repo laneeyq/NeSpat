@@ -1,15 +1,15 @@
 // All times here are readings from the same boot's continuous clock.
 #[repr(C)]
 pub struct AuthorityClock {
-    expiry: f64,
-    last_observation: f64,
-    last_heartbeat: f64,
-    timeout: f64,
-    has_expiry: bool,
-    has_observation: bool,
-    has_heartbeat: bool,
-    has_timeout: bool,
-    full: bool,
+    pub(crate) expiry: f64,
+    pub(crate) last_observation: f64,
+    pub(crate) last_heartbeat: f64,
+    pub(crate) timeout: f64,
+    pub(crate) has_expiry: bool,
+    pub(crate) has_observation: bool,
+    pub(crate) has_heartbeat: bool,
+    pub(crate) has_timeout: bool,
+    pub(crate) full: bool,
 }
 #[no_mangle]
 pub extern "C" fn nespat_authority_expired(g: &AuthorityClock, now: f64) -> bool {
@@ -46,14 +46,14 @@ pub unsafe extern "C" fn nespat_ledger_drop(ledger: *mut ReplayLedger) {
 }
 #[repr(C)]
 pub struct RequestAdmission {
-    id: [u8; 16],
-    sequence: i64,
-    last_sequence: i64,
-    requests: u32,
-    has_sequence: bool,
-    selected: bool,
-    matching_session: bool,
-    recovery: bool,
+    pub(crate) id: [u8; 16],
+    pub(crate) sequence: i64,
+    pub(crate) last_sequence: i64,
+    pub(crate) requests: u32,
+    pub(crate) has_sequence: bool,
+    pub(crate) selected: bool,
+    pub(crate) matching_session: bool,
+    pub(crate) recovery: bool,
 }
 #[repr(u8)]
 pub enum Admission {

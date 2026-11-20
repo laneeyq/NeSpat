@@ -168,3 +168,4 @@ bool nespat_session_prepare(NeSpatSession * _Nonnull session);
 bool nespat_session_display(NeSpatSession * _Nonnull session, const uint8_t * _Nonnull id);
 bool nespat_session_heartbeat(NeSpatSession * _Nonnull session, const uint8_t * _Nonnull id);
 bool nespat_session_recover(NeSpatSession * _Nonnull session, const uint8_t * _Nonnull id, bool manual);
+bool nespat_verify_record(const uint8_t * _Nullable bytes, size_t len,const uint8_t * _Nonnull setup,uint32_t uid,CFStringRef _Nonnull client,bool selected,double maximum);

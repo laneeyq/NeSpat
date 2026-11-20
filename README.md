@@ -64,7 +64,7 @@ sudo "/Library/Application Support/NeSpatPrivileged/Uninstall" --uninstall
 <details>
 <summary><strong>Сборка из исходников</strong></summary>
 
-На Mac с Apple Silicon и инструментами Swift 6 и Rust 1.94 (rustup) выполни из корня проекта:
+Панель, фоновые службы, установщик и клиент обновлений написаны на Rust. Для сборки DMG на Apple Silicon понадобятся Rust 1.94, инструменты командной строки Xcode и Python с dmgbuild. Набор проверок также запускает тесты совместимости предыдущей версии на Swift 6.
 
 ```sh
 bash scripts/test.sh

@@ -183,6 +183,7 @@ impl Form {
             let automatic = btn("Автоматический режим", 6, true, false);
             let login = btn("Запускать при входе", 7, true, false);
             let quit = btn("Выход", 8, false, false);
+            quit.setKeyEquivalent(&ns("q"));
             let updates = btn("Автообновления", 9, true, false);
             let check = btn("Проверить", 10, false, true);
             let message = text("", 11., 0., true);

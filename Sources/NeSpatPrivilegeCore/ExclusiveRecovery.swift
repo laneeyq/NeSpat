@@ -1,4 +1,5 @@
 import Foundation
+import NeSpatNative
 
 /// Root-provisioned policy. Never accepted in an XPC payload.
 public struct ExclusivePolicy: Sendable {
@@ -35,23 +36,16 @@ public struct ExclusiveAttempt: Codable, Equatable, Sendable {
 
 extension PrivilegedRecord {
     func verifiedAttempt(_ policy: ExclusivePolicy) throws -> ExclusiveAttempt {
-        try validateOwnership(boot: bootID)
-        guard let proof = exclusiveAttempt, exclusiveReservation == policy.setup, proof.setup == policy.setup, proof.session == id,
-              proof.owner == owner, owner.process != nil, owner.uid == policy.uid,
-              owner.codeIdentity == policy.clientRequirement, proof.boot == bootID,
-              proof.issued.isFinite, proof.issued >= 0,
-              proof.expires == authorityExpires, proof.deadline == deadline,
-              interference != true else { throw PrivilegeError.ownership }
-        if proof.selectedLifetime == true {
-            guard policy.selectedLifetime else { throw PrivilegeError.ownership }
-        }
-        if proof.unlimited == true {
-            guard proof.selectedLifetime == true, proof.expires == nil, proof.deadline == nil else { throw PrivilegeError.ownership }
-        } else {
-            guard let expires = proof.expires, proof.deadline != nil, expires.isFinite, expires > proof.issued,
-                  proof.selectedLifetime == true || expires - proof.issued <= policy.maximum else { throw PrivilegeError.ownership }
-        }
-        try validateTimer()
+        guard let proof = exclusiveAttempt else { throw PrivilegeError.ownership }
+        var setup = policy.setup.uuid
+        let encoded = try JSONEncoder().encode(self)
+        guard encoded.withUnsafeBytes({ raw in
+            withUnsafeBytes(of: &setup) { uuid in
+                nespat_verify_record(raw.bindMemory(to: UInt8.self).baseAddress, raw.count,
+                    uuid.bindMemory(to: UInt8.self).baseAddress!, policy.uid,
+                    policy.clientRequirement as CFString, policy.selectedLifetime, policy.maximum)
+            }
+        }) else { throw PrivilegeError.ownership }
         return proof
     }
 }

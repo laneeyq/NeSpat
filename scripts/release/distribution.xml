@@ -7,5 +7,5 @@
 <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
 <choices-outline><line choice="main"/></choices-outline>
 <choice id="main" visible="false"><pkg-ref id="local.nespat.public.install"/></choice>
-<pkg-ref id="local.nespat.public.install" version="1.1.0" auth="Root">component.pkg</pkg-ref>
+<pkg-ref id="local.nespat.public.install" version="1.2.0" auth="Root">component.pkg</pkg-ref>
 </installer-gui-script>

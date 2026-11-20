@@ -39,6 +39,30 @@ pub(crate) fn available(boot: [u8; 16], setup: [u8; 16], watch: bool) -> bool {
     )
     .is_some()
 }
+pub(crate) fn latest(boot: [u8; 16], setup: [u8; 16], watch: bool) -> Option<[u8; 16]> {
+    let mut p = Pulse {
+        epoch: [0; 16],
+        boot,
+        setup,
+        continuous: 0.,
+        pid: 0,
+    };
+    read(&mut p, watch)?;
+    Some(p.epoch)
+}
+pub(crate) fn heartbeat(boot: [u8; 16], setup: [u8; 16], epoch: [u8; 16], watch: bool) -> bool {
+    publish(
+        &mut Pulse {
+            epoch,
+            boot,
+            setup,
+            continuous: 0.,
+            pid: 0,
+        },
+        watch,
+    )
+    .is_some()
+}
 fn path(watch: bool) -> std::path::PathBuf {
     Path::new(RUNTIME).join(format!("{}.json", role(watch)))
 }

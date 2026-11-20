@@ -1,6 +1,6 @@
 [package]
 name = "nespat"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 publish = false
 
@@ -11,7 +11,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSAlert", "NSApplication", "NSRunningApplication", "NSWorkspace", "NSStatusItem", "NSStatusBar", "NSStatusBarButton", "NSButton", "NSControl", "NSSwitch", "NSBox","NSText", "NSBezierPath","NSGradient","NSGraphicsContext","NSAppearance","NSBitmapImageRep","NSImageRep","NSGraphics", "NSFont", "NSFontDescriptor", "NSView", "NSViewController", "NSWindow", "NSPopover", "NSGridView", "NSTextField", "NSColor", "NSSegmentedControl", "NSCell", "NSLayoutConstraint", "NSAttributedString", "NSStringDrawing", "objc2-core-foundation"] }
 objc2-service-management = { version = "0.3", default-features = false, features = ["std", "objc2", "objc2-foundation", "SMAppService"] }
 serde = "1"
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 libc = "0.2"
 plist = "1"
 tempfile = "3"

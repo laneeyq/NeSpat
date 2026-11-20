@@ -42,10 +42,11 @@ pub unsafe extern "C" fn nespat_matches_host(model: CFStringRef, build: CFString
     matches(c"hw.model", model) && matches(c"kern.osversion", build)
 }
 #[repr(C)]
+#[derive(Default)]
 pub struct ProcessStamp {
-    uid: u32,
-    seconds: u64,
-    micros: u64,
+    pub(crate) uid: u32,
+    pub(crate) seconds: u64,
+    pub(crate) micros: u64,
 }
 #[no_mangle]
 pub extern "C" fn nespat_snapshot(pid: i32, out: &mut ProcessStamp) -> i8 {

@@ -67,6 +67,32 @@ pub struct Profile {
     trial_boot: Option<[u8; 16]>,
 }
 impl Profile {
+    #[cfg(test)]
+    pub(crate) fn fixture(uid: u32) -> Self {
+        let setup = [1; 16];
+        let doc = Document {
+            version: 1,
+            setup: crate::request::uuid_text(&setup),
+            uid,
+            gui_hash: "a".repeat(40),
+            helper_hash: "b".repeat(40),
+            enabled: true,
+            acceptance_only: None,
+            exclusive_control: Some(true),
+            host_model: None,
+            os_build: None,
+            selected_lifetime: Some(true),
+            trial_only: None,
+            trial_on_battery: None,
+            trial_boot: None,
+            trial_expires: None,
+        };
+        Self {
+            doc,
+            setup,
+            trial_boot: None,
+        }
+    }
     pub(crate) fn load() -> Option<Self> {
         let doc = Document::read(&trust_profile()?)?;
         if doc.version != 1 || doc.uid == 0 {
@@ -84,6 +110,34 @@ impl Profile {
             setup,
             trial_boot,
         })
+    }
+    pub(crate) fn uid(&self) -> u32 {
+        self.doc.uid
+    }
+    pub(crate) fn maximum(&self) -> f64 {
+        if self.trial_only() {
+            120.
+        } else {
+            43200.
+        }
+    }
+    pub(crate) fn permits_source(&self, ac: i8) -> bool {
+        !self.trial_only()
+            || ac
+                == if self.doc.trial_on_battery == Some(true) {
+                    0
+                } else {
+                    1
+                }
+    }
+    pub(crate) fn gui_pin(&self) -> Option<String> {
+        pin(&self.doc.gui_hash, "local.nespat.app")
+    }
+    pub(crate) fn helper_pin(&self) -> Option<String> {
+        pin(&self.doc.helper_hash, "local.nespat.privilege-helper")
+    }
+    pub(crate) fn trial_expires(&self) -> Option<f64> {
+        self.doc.trial_expires
     }
     pub(crate) fn client_requirements(&self) -> Option<(String, String)> {
         if self.doc.uid != unsafe { libc::getuid() } {
@@ -109,10 +163,10 @@ impl Profile {
     pub(crate) fn trial_only(&self) -> bool {
         self.doc.trial_only == Some(true)
     }
-    fn exclusive(&self) -> bool {
+    pub(crate) fn exclusive(&self) -> bool {
         self.doc.exclusive_control == Some(true) && self.doc.acceptance_only != Some(true)
     }
-    fn selected(&self) -> bool {
+    pub(crate) fn selected(&self) -> bool {
         self.exclusive()
             && self.doc.trial_only != Some(true)
             && self.doc.selected_lifetime == Some(true)

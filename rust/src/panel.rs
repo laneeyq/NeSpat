@@ -170,7 +170,7 @@ define_class!(
             match s.tag(){
                 1=>{let on=f.toggle.state()!=0;if !on{set_flag(AUTO,false);} w.driver.intent(on);}
                 2=>{set_flag(AUTO,false);if r.power==1{w.driver.recover();}else{w.driver.intent(false);}}
-                3 if !busy(&report)=>{let d=f.input.stringValue().to_string();let seconds=unsafe{crate::policy::nespat_parse_minutes(d.as_ptr(),d.len())};if crate::policy::nespat_deadline(now(),seconds as f64).is_finite(){set_custom(seconds/60);f.input.setStringValue(&ns(&custom()));w.input_error.borrow_mut().clear();}else{*w.input_error.borrow_mut()="Введите целое положительное число минут.".into();}}
+                3 if !busy(&report)=>{let d=f.input.stringValue().to_string();let seconds=unsafe{crate::policy::nespat_parse_minutes(d.as_ptr(),d.len())};if crate::policy::nespat_deadline(now(),seconds as f64).is_finite(){set_custom(seconds/60);f.input.setStringValue(&ns(&custom()));w.input_error.borrow_mut().clear();}else{*w.input_error.borrow_mut()="Введите положительное целое число минут, представимое без переполнения и потери точности срока.".into();}}
                 4=>{f.expanded.set(!f.expanded.get());if f.expanded.get(){f.refresh_details();}}
                 5=>{open(std::path::Path::new("/System/Applications/Utilities/Activity Monitor.app"));}
                 6=>{let on=f.automatic.state()!=0;set_flag(AUTO,on);w.driver.intent(on);}

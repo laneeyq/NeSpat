@@ -148,7 +148,7 @@ use std::{mem::ManuallyDrop, ptr};
 fn cf_data(bytes: &[u8]) -> CFDataRef {
     ManuallyDrop::new(CFData::from_buffer(bytes)).as_concrete_TypeRef()
 }
-fn digest(bytes: &[u8]) -> String {
+pub(crate) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 #[no_mangle]
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn nespat_journal_digest(bytes: CFDataRef) -> CFStringRef 
     )))
     .as_concrete_TypeRef()
 }
-fn integrity(payload: &[u8]) -> Vec<u8> {
+pub(crate) fn integrity(payload: &[u8]) -> Vec<u8> {
     format!(
         r#"{{"payload":"{}","sha256":"{}"}}"#,
         STANDARD.encode(payload),
@@ -181,12 +181,17 @@ pub unsafe extern "C" fn nespat_journal_integrity(bytes: CFDataRef, unwrap: bool
             ptr::null()
         };
     }
-    let parse = || {
-        let obj: serde_json::Value = serde_json::from_slice(bytes).ok()?;
-        let payload = STANDARD.decode(obj["payload"].as_str()?).ok()?;
-        (bytes == integrity(&payload)).then(|| cf_data(&payload))
-    };
-    parse().unwrap_or(ptr::null())
+    unwrap_integrity(bytes)
+        .map(|v| cf_data(&v))
+        .unwrap_or(ptr::null())
+}
+pub(crate) fn unwrap_integrity(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() > MAX {
+        return None;
+    }
+    let obj: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let payload = STANDARD.decode(obj["payload"].as_str()?).ok()?;
+    (bytes == integrity(&payload)).then_some(payload)
 }
 
 fn open_file(fd: i32) -> Option<File> {
@@ -241,8 +246,8 @@ pub(crate) fn trust_profile() -> Option<Vec<u8>> {
 use std::os::fd::IntoRawFd;
 #[repr(C)]
 pub struct JournalFiles {
-    directory: i32,
-    lock: i32,
+    pub(crate) directory: i32,
+    pub(crate) lock: i32,
 }
 fn finish_open(directory: File, owner: u32) -> Option<JournalFiles> {
     if !nespat_journal_check(directory.as_raw_fd(), true, owner) {
@@ -264,7 +269,7 @@ fn finish_open(directory: File, owner: u32) -> Option<JournalFiles> {
         lock: lock.into_raw_fd(),
     })
 }
-fn open_journal(path: &str, owner: u32) -> Option<JournalFiles> {
+pub(crate) fn open_journal(path: &str, owner: u32) -> Option<JournalFiles> {
     if !path.starts_with('/') {
         return None;
     }
