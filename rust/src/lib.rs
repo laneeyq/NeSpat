@@ -236,3 +236,5 @@ mod display_guard;
 mod external_input;
 
 mod lid_notifications;
+mod display_layout;
+mod display_reconnect;

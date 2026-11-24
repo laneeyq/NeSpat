@@ -172,11 +172,11 @@ define_class!(
         fn action(&self,s:&NSControl){
             let w=self.ivars();let Some(f)=w.form.get()else{return;};let r=w.sensors.read();let report=w.driver.report();
             match s.tag(){
-                1=>{let on=f.toggle.state()!=0;if !on{set_flag(AUTO,false);} w.driver.intent(on);}
+                1=>{let on=f.toggle.state()!=0;if !on{set_flag(AUTO,false);} if on{crate::display_layout::request_access_if_needed();} w.driver.intent(on);}
                 2=>{set_flag(AUTO,false);if r.power==1{w.driver.recover();}else{w.driver.intent(false);}}
                 3 if !busy(&report)=>{let d=f.input.stringValue().to_string();let seconds=unsafe{crate::policy::nespat_parse_minutes(d.as_ptr(),d.len())};if crate::policy::nespat_deadline(now(),seconds as f64).is_finite(){set_custom(seconds/60);f.input.setStringValue(&ns(&custom()));w.input_error.borrow_mut().clear();}else{*w.input_error.borrow_mut()="Введите положительное целое число минут, представимое без переполнения и потери точности срока.".into();}}
                 4=>{f.expanded.set(!f.expanded.get());if f.expanded.get(){f.refresh_details();}}
-                6=>{let on=f.automatic.state()!=0;set_flag(AUTO,on);w.driver.intent(on);}
+                6=>{let on=f.automatic.state()!=0;set_flag(AUTO,on);if on{crate::display_layout::request_access_if_needed();} w.driver.intent(on);}
                 7=>{let (local,installed)=login_context();let ok=crate::login::nespat_login_set(f.login.state()!=0,local,installed);w.login_error.set(!ok);f.login.setState(crate::login::nespat_login_enabled(local,installed) as isize);}
                 8=>w.driver.quit(),
                 9=>set_flag(UPDATES,f.updates.state()!=0),

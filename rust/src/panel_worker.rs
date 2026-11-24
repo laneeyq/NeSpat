@@ -50,8 +50,8 @@ impl Worker {
             let mut driver = Driver::default();
             let mut command = Some((0, Command::Intent(automatic)));
             let mut applied = 0;
+            let mut quit = false;
             loop {
-                let mut quit = false;
                 autoreleasepool(|_| {
                     let action = command.take().map(|(generation, action)| {
                         applied = generation;
@@ -80,6 +80,7 @@ impl Worker {
                         && state.generation == applied
                         && !intent.load(Ordering::Acquire)
                         && driver.can_exit()
+                        && !monitor.layout_busy()
                         && crate::observation::nespat_sleep_disabled() == 0;
                 });
                 command = match receiver.recv_timeout(Duration::from_secs(5)) {

@@ -138,7 +138,7 @@ extern "C" {
     ) -> i32;
 }
 
-fn any_awake() -> Option<bool> {
+pub(super) fn online_ids() -> Option<Vec<u32>> {
     let mut count = 0;
     if unsafe { CGGetOnlineDisplayList(0, std::ptr::null_mut(), &mut count) } != 0 || count == 0 {
         return None;
@@ -147,7 +147,11 @@ fn any_awake() -> Option<bool> {
     if unsafe { CGGetOnlineDisplayList(count, ids.as_mut_ptr(), &mut count) } != 0 || count == 0 {
         return None;
     }
-    summarize(ids.into_iter().take(count as usize).map(|id| unsafe {
+    ids.truncate(count as usize);
+    Some(ids)
+}
+fn any_awake() -> Option<bool> {
+    summarize(online_ids()?.into_iter().map(|id| unsafe {
         if CGDisplayIsAsleep(id) != 0 {
             Some(false)
         } else if CGDisplayIsActive(id) != 0 {
@@ -220,6 +224,8 @@ struct State {
     generation: u64,
     permit: Option<Permit>,
     stop: bool,
+    layout_notice: Option<&'static str>,
+    layout_busy: bool,
     notice: Option<&'static str>,
 }
 impl State {
@@ -239,6 +245,8 @@ impl Guard {
     pub fn start() -> Self {
         let state = Arc::new(Mutex::new(State::default()));
         let shared = state.clone();
+        let layout = state.clone();
+        thread::spawn(move || manage_layout(layout));
         let thread = thread::spawn(move || monitor(shared)).thread().clone();
         Self { state, thread }
     }
@@ -260,8 +268,12 @@ impl Guard {
         self.state.lock().unwrap().stop = true;
         self.thread.unpark();
     }
+    pub fn layout_busy(&self) -> bool {
+        self.state.lock().unwrap().layout_busy
+    }
     pub fn notice(&self) -> Option<&'static str> {
-        self.state.lock().unwrap().notice
+        let s = self.state.lock().unwrap();
+        s.notice.or(s.layout_notice)
     }
 }
 
@@ -366,5 +378,66 @@ fn monitor(shared: Arc<Mutex<State>>) {
         unsafe {
             CGDisplayRemoveReconfigurationCallback(reconfigured, std::ptr::null_mut());
         }
+    }
+}
+
+fn manage_layout(shared: Arc<Mutex<State>>) {
+    let Some(mut layout) = crate::display_reconnect::Layout::open() else {
+        return;
+    };
+    let key_now = || shared.lock().unwrap().key();
+    let mut recovery_started = layout.pending().then(std::time::Instant::now);
+    loop {
+        let (stop, key) = {
+            let s = shared.lock().unwrap();
+            (s.stop, s.key())
+        };
+        let lid = if key.is_some() {
+            nespat_lid_closed()
+        } else {
+            -1
+        };
+        let valid = || key.is_some() && key_now() == key && closed();
+        let settling =
+            recovery_started.is_some_and(|since| since.elapsed() < Duration::from_secs(4));
+        let notice = if !stop && lid == 1 && valid() && !settling {
+            shared.lock().unwrap().layout_busy = true;
+            layout.disconnect(key.unwrap(), valid);
+            None
+        } else {
+            if layout.pending() && recovery_started.is_none() {
+                recovery_started = Some(std::time::Instant::now());
+            }
+            layout.restore();
+            if !layout.pending() {
+                recovery_started = None
+            }
+            if !stop && lid == 0 && !settling {
+                layout.sample(key.is_some(), || key_now() == key);
+            }
+            if key.is_some() && !crate::display_layout::trusted() {
+                Some("Для возврата окон разрешите NeSpat «Универсальный доступ».")
+            } else {
+                None
+            }
+        };
+        // A physically unplugged monitor can be recovered later. Do not hold Quit indefinitely.
+        {
+            let mut s = shared.lock().unwrap();
+            s.layout_busy = layout.pending()
+                && recovery_started.is_none_or(|t| t.elapsed() < Duration::from_secs(4));
+            s.layout_notice = notice;
+        }
+        if stop
+            && (!layout.pending()
+                || recovery_started.is_some_and(|t| t.elapsed() >= Duration::from_secs(4)))
+        {
+            break;
+        }
+        thread::sleep(if key.is_some() || layout.pending() {
+            Duration::from_millis(200)
+        } else {
+            Duration::from_millis(500)
+        });
     }
 }
