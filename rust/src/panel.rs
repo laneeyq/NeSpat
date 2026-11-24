@@ -162,6 +162,8 @@ define_class!(
     #[ivars=Window]
     struct NeSpatPanelActions;
     impl NeSpatPanelActions {
+        #[unsafe(method(screensAwoke:))]
+        fn screens_awoke(&self,_notification:&objc2::runtime::AnyObject){crate::display_guard::display_changed();}
         #[unsafe(method(tick:))]
         fn tick(&self,_timer:&NSTimer){self.ivars().refresh(self.mtm());}
         #[unsafe(method(pick:))]
@@ -221,7 +223,19 @@ pub fn run(m: MainThreadMarker) {
             true,
         )
     };
+    let center = NSWorkspace::sharedWorkspace().notificationCenter();
+    unsafe {
+        center.addObserver_selector_name_object(
+            &target,
+            sel!(screensAwoke:),
+            Some(&ns("NSWorkspaceScreensDidWakeNotification")),
+            None,
+        );
+    }
     app.run();
+    unsafe {
+        center.removeObserver(&target);
+    }
     timer.invalidate();
     unsafe {
         crate::status_item::nespat_status_destroy(w.status_item.replace(std::ptr::null_mut()));

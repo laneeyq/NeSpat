@@ -230,10 +230,14 @@ impl Session {
         self.cached = None;
         true
     }
-    pub(crate) fn display(&self, id: [u8; 16]) -> bool {
-        if !self.cached.as_ref().is_some_and(|r| {
+    pub(crate) fn confirms_display(&self, id: [u8; 16]) -> bool {
+        self.cached.as_ref().is_some_and(|r| {
             r["active"] == true && r["fullAuthority"] == true && session_id(r) == Some(id)
-        }) || nespat_active_uid() != unsafe { libc::getuid() }
+        })
+    }
+    pub(crate) fn display(&self, id: [u8; 16]) -> bool {
+        if !self.confirms_display(id)
+            || nespat_active_uid() != unsafe { libc::getuid() }
             || nespat_sleep_disabled() != 1
             || nespat_lid_closed() != 1
         {

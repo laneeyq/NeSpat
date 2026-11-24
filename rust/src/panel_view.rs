@@ -277,7 +277,12 @@ impl Form {
         };
         extra(
             &self.error,
-            report.status.error.as_deref().unwrap_or(""),
+            report
+                .status
+                .error
+                .as_deref()
+                .or(report.display_notice)
+                .unwrap_or(""),
             &mut y,
         );
         self.recover

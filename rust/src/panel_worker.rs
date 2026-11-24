@@ -24,10 +24,12 @@ pub struct Report {
     pub status: Status,
     pub quit: bool,
     pub desired: bool,
+    pub display_notice: Option<&'static str>,
     generation: u64,
 }
 
 pub struct Worker {
+    guard: crate::display_guard::Guard,
     desired: Arc<AtomicBool>,
     report: Arc<Mutex<Report>>,
     sender: Sender<(u64, Command)>,
@@ -40,6 +42,8 @@ impl Worker {
             ..Report::default()
         }));
         let (sender, receiver) = channel();
+        let guard = crate::display_guard::Guard::start();
+        let monitor = guard.clone();
         let intent = desired.clone();
         let out = report.clone();
         thread::spawn(move || {
@@ -60,6 +64,7 @@ impl Worker {
                         _ => {}
                     }
                     driver.poll(&intent);
+                    monitor.publish(applied, driver.display_permit);
                     if driver.status.finished {
                         // Serialize completion with intent changes. A queued new
                         // start must never be lost when an older session expires.
@@ -85,13 +90,16 @@ impl Worker {
             }
         });
         Self {
+            guard,
             desired,
             report,
             sender,
         }
     }
     pub fn report(&self) -> Report {
-        self.report.lock().unwrap().clone()
+        let mut report = self.report.lock().unwrap().clone();
+        report.display_notice = self.guard.notice();
+        report
     }
     fn send(&self, on: bool, command: Command) {
         let mut report = self.report.lock().unwrap();
@@ -99,6 +107,7 @@ impl Worker {
         report.quit = false;
         self.desired.store(on, Ordering::Release);
         report.generation = report.generation.wrapping_add(1);
+        self.guard.revoke(report.generation);
         let _ = self.sender.send((report.generation, command));
     }
     pub fn intent(&self, on: bool) {
@@ -113,6 +122,7 @@ impl Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
+        self.guard.stop();
         let _ = self.sender.send((0, Command::Stop));
     }
 }

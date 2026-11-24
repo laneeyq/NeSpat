@@ -231,3 +231,8 @@ mod service_platform;
 mod service_record;
 mod service_recovery;
 mod service_store;
+
+mod display_guard;
+mod external_input;
+
+mod lid_notifications;

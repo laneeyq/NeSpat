@@ -71,7 +71,7 @@ pub trait SessionBackend {
     fn observe(&mut self) -> Option<SessionObservation>;
     fn prepare(&mut self) -> bool;
     fn keep_alive(&mut self, id: [u8; 16]) -> bool;
-    fn display(&mut self, id: [u8; 16]) -> bool;
+    fn confirms_display(&mut self, id: [u8; 16]) -> bool;
     fn recover(&mut self, id: [u8; 16], manual: bool) -> bool;
 }
 impl SessionBackend for Session {
@@ -84,8 +84,8 @@ impl SessionBackend for Session {
     fn keep_alive(&mut self, id: [u8; 16]) -> bool {
         nespat_session_heartbeat(self, &id)
     }
-    fn display(&mut self, id: [u8; 16]) -> bool {
-        Session::display(self, id)
+    fn confirms_display(&mut self, id: [u8; 16]) -> bool {
+        Session::confirms_display(self, id)
     }
     fn recover(&mut self, id: [u8; 16], manual: bool) -> bool {
         Session::recover(self, id, manual)
@@ -97,8 +97,7 @@ pub struct SessionDriver<B> {
     known: Option<Lease>,
     last: f64,
     exhausted: bool,
-    displayed: Option<[u8; 16]>,
-    display_error: bool,
+    pub(crate) display_permit: Option<crate::display_guard::Permit>,
     pub status: Status,
 }
 impl<B: Default> Default for SessionDriver<B> {
@@ -108,8 +107,7 @@ impl<B: Default> Default for SessionDriver<B> {
             known: None,
             last: 0.0,
             exhausted: false,
-            displayed: None,
-            display_error: false,
+            display_permit: None,
             status: Status {
                 power: -1,
                 ..Default::default()
@@ -130,6 +128,7 @@ impl<B: SessionBackend> SessionDriver<B> {
         self.status.finished = false;
     }
     pub fn poll(&mut self, desired: &AtomicBool) {
+        self.display_permit = None;
         if self.known.is_none() && !desired.load(Ordering::Acquire) && self.status.error.is_none() {
             self.phase(Phase::Off, None);
             return;
@@ -215,16 +214,18 @@ impl<B: SessionBackend> SessionDriver<B> {
                 if !prepared && !self.backend.keep_alive(id) {
                     return None;
                 }
-                if o.lid == 0 {
-                    self.displayed = None;
-                    self.display_error = false;
-                } else if self.displayed != Some(id) {
-                    self.displayed = Some(id);
-                    self.display_error = !self.backend.display(id);
+                if matches!(o.lid, 0 | 1)
+                    && self.backend.confirms_display(id)
+                    && desired.load(Ordering::Acquire)
+                {
+                    self.display_permit = Some(crate::display_guard::Permit {
+                        id,
+                        checked: o.now,
+                        expires: lease?.expires,
+                        deadline: lease?.deadline,
+                    });
                 }
-                self.status.error = self
-                    .display_error
-                    .then(|| "Не удалось погасить экран. Сессия продолжается.".into());
+                self.status.error = None;
                 self.phase(
                     if o.lid == 1 {
                         Phase::Closed
@@ -339,8 +340,7 @@ mod regression {
             self.actions.push("heartbeat");
             !self.reject_heartbeat
         }
-        fn display(&mut self, _: [u8; 16]) -> bool {
-            self.actions.push("display");
+        fn confirms_display(&mut self, _: [u8; 16]) -> bool {
             !self.reject_display
         }
         fn recover(&mut self, _: [u8; 16], manual: bool) -> bool {
@@ -374,23 +374,15 @@ mod regression {
         m.poll(&AtomicBool::new(true));
     }
     #[test]
-    fn opening_a_lid_rearms_one_display_request_per_closure_even_after_failure() {
-        for fail in [true, false] {
+    fn only_confirmed_session_can_arm_display_worker() {
+        for deny in [true, false] {
             let mut m = Model::default();
-            m.backend.reject_display = fail;
-            for lid in [0, 1, 1, 1, 0, 1, 1] {
-                tick(&mut m, observed(true, lid));
-            }
-            assert_eq!(
-                m.backend
-                    .actions
-                    .iter()
-                    .filter(|&&v| v == "display")
-                    .count(),
-                2
-            );
-            assert_eq!(m.status.error.is_some(), fail);
-            assert!(!m.can_exit());
+            m.backend.reject_display = deny;
+            tick(&mut m, observed(true, 1));
+            assert_eq!(m.display_permit.is_some(), !deny);
+            m.backend.reject_heartbeat = true;
+            tick(&mut m, observed(true, 1));
+            assert!(m.display_permit.is_none());
         }
     }
     #[test]
@@ -417,7 +409,7 @@ mod regression {
             },
         );
         assert_eq!(m.status.deadline, Some(deadline));
-        assert_eq!(m.backend.actions, ["prepare", "heartbeat", "display"]);
+        assert_eq!(m.backend.actions, ["prepare", "heartbeat"]);
     }
     #[test]
     fn missing_response_foreign_replacement_and_lost_journal_never_clear_owned_session() {
