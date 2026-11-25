@@ -120,7 +120,14 @@ pub(crate) unsafe fn resize(target: *const c_void, size: objc2_foundation::NSSiz
         popover.setAnimates(false);
         current.close();
         current.setContentViewController(None);
-        controller.view().setFrameSize(size);
+        // The old popover can leave a translated frame after its content grows or shrinks.
+        // Present from a clean local coordinate system each time it is reattached.
+        let view = controller.view();
+        view.setFrame(objc2_foundation::NSRect::new(
+            objc2_foundation::NSPoint::ZERO,
+            size,
+        ));
+        view.setBoundsOrigin(objc2_foundation::NSPoint::ZERO);
         popover.setContentViewController(Some(&controller));
         popover.setContentSize(size);
         popover.showRelativeToRect_ofView_preferredEdge(anchor.bounds(), anchor, NSRectEdge::MinY);

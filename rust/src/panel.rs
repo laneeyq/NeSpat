@@ -370,6 +370,45 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path, show_devices: bool) 
                 return None;
             }
         }
+        // An asynchronous reading can replace the loading row while the field editor has focus.
+        form.devices_expanded.set(true);
+        form.set_devices(crate::device_charge::Reading {
+            devices: vec![],
+            note: "Обновление…".into(),
+        });
+        form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+        settle();
+        form.controller
+            .view()
+            .window()?
+            .makeFirstResponder(Some(&form.input));
+        let rows = ["LAMZU Maya X", "WH-CH510"].map(|name| crate::device_charge::Device {
+            name: name.into(),
+            icon: "headphones",
+            percent: Some(70),
+            charging: false,
+        });
+        form.set_devices(crate::device_charge::Reading {
+            devices: rows.to_vec(),
+            note: String::new(),
+        });
+        form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+        settle();
+        // Repeated displacement with the content size unchanged must also self-correct.
+        for displacement in [26., 26., -32., -32.] {
+            let v = form.controller.view();
+            let origin = v.frame().origin;
+            v.setFrameOrigin(NSPoint::new(origin.x, origin.y + displacement));
+            form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+            settle();
+            if (header_gap()? - initial_gap).abs() > 1. {
+                eprintln!("device list clipped header: {}", header_gap()?);
+                return None;
+            }
+        }
+        form.devices_expanded.set(false);
+        form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+        settle();
         for message in [
             "Восстановление не подтверждено. Проверяем состояние сна.",
             "",

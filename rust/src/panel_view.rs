@@ -18,7 +18,6 @@ define_class!(
 pub(crate) struct Form {
     pub controller: Retained<NSViewController>,
     root: Retained<NSView>,
-    corrected_window: Cell<bool>,
     heading: Retained<NSTextField>,
     pub toggle: Retained<NSSwitch>,
     summary: Retained<NSTextField>,
@@ -210,7 +209,6 @@ impl Form {
             message.setUsesSingleLineMode(false);
             Self {
                 root: root.into_super(),
-                corrected_window: Cell::new(false),
                 controller,
                 heading,
                 toggle,
@@ -485,8 +483,7 @@ impl Form {
                 - top.size.height;
             gap > 36. || gap < 8.
         });
-        let already_corrected = self.corrected_window.replace(misplaced);
-        if before != after || (misplaced && !already_corrected) {
+        if before != after || misplaced {
             unsafe {
                 crate::status_item::resize(item, after);
             }
