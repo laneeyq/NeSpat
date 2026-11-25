@@ -116,6 +116,7 @@ type Config = *mut c_void;
 type Enable = unsafe extern "C" fn(Config, u32, bool) -> i32;
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
+    fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(id: u32) -> Rect;
     fn CGDisplayIsBuiltin(id: u32) -> u32;
     fn CGDisplayIsOnline(id: u32) -> u32;
@@ -130,6 +131,9 @@ extern "C" {
 fn enable_fn() -> Option<Enable> {
     let p = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"CGSConfigureDisplayEnabled".as_ptr()) };
     (!p.is_null()).then(|| unsafe { std::mem::transmute::<*mut c_void, Enable>(p) })
+}
+pub(super) fn main_id() -> u32 {
+    unsafe { CGMainDisplayID() }
 }
 pub(super) fn supported() -> bool {
     enable_fn().is_some()

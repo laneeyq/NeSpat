@@ -4,6 +4,22 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn missing_headset_level_uses_its_address_and_preserves_reported_zero() {
+        let sample = json!({"SPBluetoothDataType":[{"device_connected":[
+            {"WH-CH510":{"device_address":"AA-BB-CC-DD-EE-FF","device_minorType":"Headset"}},
+            {"Other":{"device_address":"00-11-22-33-44-55","device_batteryLevelMain":"0%"}}
+        ]}]});
+        let r = bluetooth_with(&sample, |addr| {
+            assert_eq!(addr, "AA-BB-CC-DD-EE-FF");
+            Some(70)
+        })
+        .unwrap();
+        assert_eq!(
+            r.iter().map(|d| d.percent).collect::<Vec<_>>(),
+            vec![Some(70), Some(0)]
+        );
+    }
+    #[test]
     fn list_only_connected_devices_preserving_real_zero_and_unknown() {
         let data = json!({"SPBluetoothDataType":[{"device_connected":[{"Mouse":{"device_minorType":"Mouse","device_batteryLevelMain":"0%"}},{"Headset":{"device_batteryLevelLeft":"28%","device_batteryLevelRight":"71%","device_batteryLevelCase":"101%"}},{"Keyboard":{"device_batteryLevelMain":"invalid"}}],"device_not_connected":[{"Old":{"device_batteryLevelMain":"99%"}}]}]});
         let rows = bluetooth(&data).unwrap();
@@ -69,7 +85,36 @@ fn percent(v: &Value) -> Option<u8> {
     };
     (n <= 100).then_some(n)
 }
+#[link(name = "IOBluetooth", kind = "framework")]
+extern "C" {}
+
+fn connected_level(address: &str) -> Option<u8> {
+    use objc2::{
+        msg_send,
+        rc::{autoreleasepool, Retained},
+        runtime::{AnyClass, AnyObject},
+        sel,
+    };
+    use objc2_foundation::NSString;
+    autoreleasepool(|_| unsafe {
+        let class = AnyClass::get(c"IOBluetoothDevice")?;
+        let addr = NSString::from_str(address);
+        let d: Option<Retained<AnyObject>> = msg_send![class,deviceWithAddressString:&*addr];
+        let d = d?;
+        let connected: bool = msg_send![&*d, isConnected];
+        let available: bool = msg_send![&*d,respondsToSelector:sel!(batteryPercentSingle)];
+        if !connected || !available {
+            return None;
+        }
+        let n: u8 = msg_send![&*d, batteryPercentSingle];
+        // This accessor also reports zero when a device supplies no single-battery value.
+        (1..=100).contains(&n).then_some(n)
+    })
+}
 fn bluetooth(data: &Value) -> Option<Vec<Device>> {
+    bluetooth_with(data, connected_level)
+}
+fn bluetooth_with(data: &Value, lookup: impl Fn(&str) -> Option<u8>) -> Option<Vec<Device>> {
     let controllers = data["SPBluetoothDataType"].as_array()?;
     if !controllers
         .iter()
@@ -122,7 +167,8 @@ fn bluetooth(data: &Value) -> Option<Vec<Device>> {
                     name: name.clone(),
                     icon,
                     percent: percent(&info["device_batteryLevelMain"])
-                        .or_else(|| percent(&info["device_batteryLevel"])),
+                        .or_else(|| percent(&info["device_batteryLevel"]))
+                        .or_else(|| lookup(info["device_address"].as_str()?)),
                     charging: false,
                 });
             }

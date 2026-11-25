@@ -2,6 +2,21 @@
 mod tests {
     use super::*;
     #[test]
+    fn last_external_is_preserved_even_when_a_new_virtual_display_appears() {
+        assert_eq!(
+            disconnect_targets(["external"], ["external", "new"], None),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            disconnect_targets(["a", "b", "c"], ["a", "b", "c", "new"], Some("b")),
+            vec!["a", "c"]
+        );
+        assert_eq!(
+            disconnect_targets(["a", "b"], ["b"], Some("a")),
+            Vec::<&str>::new()
+        );
+    }
+    #[test]
     fn journal_survives_reopen_and_preserves_another_monitor() {
         let dir = tempfile::tempdir().unwrap();
         let a = "874f30fc-f5e8-4f04-a572-a64880975789";
@@ -107,6 +122,23 @@ impl Journal {
     }
 }
 
+// Removing the last external screen in clamshell mode can invalidate even its
+// saved UUID. A display that only appeared after closure cannot anchor recovery.
+fn disconnect_targets<'a>(
+    before: impl IntoIterator<Item = &'a str>,
+    current: impl IntoIterator<Item = &'a str>,
+    main: Option<&str>,
+) -> Vec<&'a str> {
+    let online: std::collections::BTreeSet<_> = current.into_iter().collect();
+    let mut eligible: Vec<_> = before.into_iter().filter(|s| online.contains(s)).collect();
+    let anchor = main
+        .and_then(|m| eligible.iter().position(|k| *k == m))
+        .unwrap_or(0);
+    if !eligible.is_empty() {
+        eligible.remove(anchor);
+    }
+    eligible
+}
 struct Capture {
     screens: Screens,
     windows: Vec<Window>,
@@ -179,13 +211,35 @@ impl Layout {
             return;
         };
         let mut attempted = std::collections::BTreeSet::new();
-        for (uuid, s) in &c.screens {
-            if s.builtin
-                || self.journal.pending.contains_key(uuid)
-                || !current.contains_key(uuid)
-                || !valid()
-            {
+        let main = current
+            .iter()
+            .find(|(_, s)| s.id == native::main_id())
+            .map(|(k, _)| k.as_str());
+        let targets = disconnect_targets(
+            c.screens
+                .iter()
+                .filter(|(_, s)| !s.builtin)
+                .map(|(k, _)| k.as_str()),
+            current
+                .iter()
+                .filter(|(_, s)| !s.builtin)
+                .map(|(k, _)| k.as_str()),
+            main,
+        );
+        for uuid in targets {
+            let s = &c.screens[uuid];
+            if self.journal.pending.contains_key(uuid) || !valid() {
                 continue;
+            }
+            let live = native::screens().unwrap_or_default();
+            // A cable can be removed between planning and the actual transaction.
+            if !live.iter().any(|(other, screen)| {
+                other != uuid
+                    && !screen.builtin
+                    && c.screens.contains_key(other)
+                    && !attempted.contains(other)
+            }) {
+                break;
             }
             if self.journal.remember(uuid, s.id).is_err() {
                 break;
@@ -194,7 +248,7 @@ impl Layout {
                 let _ = self.journal.forget(uuid);
                 break;
             }
-            attempted.insert(uuid.clone());
+            attempted.insert(uuid.to_owned());
             if !native::switch(uuid, s.id, false) {
                 // If the transaction failed and the screen is still present it needs no recovery.
                 if native::screens().is_some_and(|m| m.contains_key(uuid)) {

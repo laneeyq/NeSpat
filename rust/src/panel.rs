@@ -317,6 +317,19 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path, show_devices: bool) 
         if !(15.0..=30.0).contains(&initial_gap) {
             return None;
         }
+        // AppKit can keep the old bounds origin after an anchored content resize.
+        form.controller
+            .view()
+            .setBoundsOrigin(NSPoint::new(0., -32.));
+        if header_gap()? - initial_gap < 25. {
+            return None;
+        }
+        form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+        settle();
+        if (header_gap()? - initial_gap).abs() > 1. {
+            eprintln!("stale header gap: {}", header_gap()?);
+            return None;
+        }
         let battery_before = form.battery_screen_y()?;
         for expanded in [true, false] {
             form.expanded.set(expanded);

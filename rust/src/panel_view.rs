@@ -18,6 +18,7 @@ define_class!(
 pub(crate) struct Form {
     pub controller: Retained<NSViewController>,
     root: Retained<NSView>,
+    corrected_window: Cell<bool>,
     heading: Retained<NSTextField>,
     pub toggle: Retained<NSSwitch>,
     summary: Retained<NSTextField>,
@@ -209,6 +210,7 @@ impl Form {
             message.setUsesSingleLineMode(false);
             Self {
                 root: root.into_super(),
+                corrected_window: Cell::new(false),
                 controller,
                 heading,
                 toggle,
@@ -447,8 +449,13 @@ impl Form {
         y += 23.;
         extra(&self.message, message, &mut y);
         let size = NSSize::new(300. + 2. * SIDE_PADDING, y + 5.);
-        if self.controller.preferredContentSize() != size {
+        if self.root.frame().size != size {
             self.root.setFrameSize(size);
+        }
+        if self.root.bounds().origin != NSPoint::ZERO {
+            self.root.setBoundsOrigin(NSPoint::ZERO);
+        }
+        if self.controller.preferredContentSize() != size {
             self.controller.setPreferredContentSize(size);
         }
     }
@@ -470,7 +477,16 @@ impl Form {
         let before = self.controller.preferredContentSize();
         render();
         let after = self.controller.preferredContentSize();
-        if before != after {
+        let misplaced = self.root.window().is_some_and(|window| {
+            let top =
+                window.convertRectToScreen(self.root.convertRect_toView(self.toggle.frame(), None));
+            let gap = window.frame().origin.y + window.frame().size.height
+                - top.origin.y
+                - top.size.height;
+            gap > 36. || gap < 8.
+        });
+        let already_corrected = self.corrected_window.replace(misplaced);
+        if before != after || (misplaced && !already_corrected) {
             unsafe {
                 crate::status_item::resize(item, after);
             }
