@@ -238,3 +238,4 @@ mod external_input;
 mod lid_notifications;
 mod display_layout;
 mod display_reconnect;
+mod device_charge;

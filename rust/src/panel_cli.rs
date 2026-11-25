@@ -133,6 +133,28 @@ pub fn run(arg: &str) -> i32 {
             );
             0
         }
+        #[cfg(debug_assertions)]
+        "--print-device-charge" => {
+            let snapshot = crate::device_charge::read();
+            for d in snapshot.devices {
+                println!(
+                    "{}: {}{}",
+                    d.name,
+                    d.percent
+                        .map(|n| format!("{n}%"))
+                        .unwrap_or_else(|| "—".into()),
+                    if d.charging {
+                        " · заряжается"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            if !snapshot.note.is_empty() {
+                println!("{}", snapshot.note);
+            }
+            0
+        }
         "--verify-local-service" => {
             if crate::client::nespat_verify_service() {
                 println!("local root helper: strict mutual-pin handshake verified; no enrollment or power request sent");

@@ -27,6 +27,7 @@ struct Window {
     status_item: Cell<*mut c_void>,
     driver: Worker,
     sensors: Monitor,
+    charges: crate::device_charge::ChargeMonitor,
     input_error: RefCell<String>,
     notice: RefCell<String>,
     login_error: Cell<bool>,
@@ -129,7 +130,13 @@ impl Window {
         }));
         form.check
             .setEnabled(!has_update || (!busy(&report) && r.power == 0));
-        form.automatic.setState(flag(AUTO, false) as isize);
+        let visible = form
+            .controller
+            .view()
+            .window()
+            .is_some_and(|w| w.isVisible());
+        let charge = self.charges.poll(visible && form.devices_expanded.get());
+        form.set_devices(charge);
         form.updates.setState(flag(UPDATES, true) as isize);
         let minutes = choice();
         let hint = if !self.input_error.borrow().is_empty() {
@@ -176,7 +183,7 @@ define_class!(
                 2=>{set_flag(AUTO,false);if r.power==1{w.driver.recover();}else{w.driver.intent(false);}}
                 3 if !busy(&report)=>{let d=f.input.stringValue().to_string();let seconds=unsafe{crate::policy::nespat_parse_minutes(d.as_ptr(),d.len())};if crate::policy::nespat_deadline(now(),seconds as f64).is_finite(){set_custom(seconds/60);f.input.setStringValue(&ns(&custom()));w.input_error.borrow_mut().clear();}else{*w.input_error.borrow_mut()="Введите положительное целое число минут, представимое без переполнения и потери точности срока.".into();}}
                 4=>{f.expanded.set(!f.expanded.get());if f.expanded.get(){f.refresh_details();}}
-                6=>{let on=f.automatic.state()!=0;set_flag(AUTO,on);if on{crate::display_layout::request_access_if_needed();} w.driver.intent(on);}
+                11=>f.devices_expanded.set(!f.devices_expanded.get()),
                 7=>{let (local,installed)=login_context();let ok=crate::login::nespat_login_set(f.login.state()!=0,local,installed);w.login_error.set(!ok);f.login.setState(crate::login::nespat_login_enabled(local,installed) as isize);}
                 8=>w.driver.quit(),
                 9=>set_flag(UPDATES,f.updates.state()!=0),
@@ -195,6 +202,7 @@ pub fn run(m: MainThreadMarker) {
         form: OnceCell::new(),
         status_item: Cell::new(std::ptr::null_mut()),
         driver: Worker::start(flag(AUTO, false)),
+        charges: Default::default(),
         sensors: Monitor::new(),
         input_error: Default::default(),
         notice: Default::default(),
@@ -243,7 +251,7 @@ pub fn run(m: MainThreadMarker) {
 }
 
 #[cfg(debug_assertions)]
-pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
+pub fn preview(m: MainThreadMarker, path: &std::path::Path, show_devices: bool) -> Option<()> {
     use crate::{panel_readings::Readings, panel_worker::Report};
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSBackingStoreType, NSBitmapImageFileType,
@@ -327,6 +335,28 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
                 return None;
             }
         }
+        let device = crate::device_charge::Device {
+            name: "LAMZU Maya X".into(),
+            icon: "computermouse",
+            percent: Some(42),
+            charging: false,
+        };
+        form.set_devices(crate::device_charge::Reading {
+            devices: vec![device],
+            note: String::new(),
+        });
+        for expanded in [true, false] {
+            form.devices_expanded.set(expanded);
+            form.with_anchored_resize(item, || form.render(&r, &report, 60, "", "", 0.));
+            settle();
+            let growth = form.controller.preferredContentSize().height - expected.height;
+            if (header_gap()? - initial_gap).abs() > 1.
+                || (expanded && growth < 20.)
+                || (!expanded && growth.abs() > 1.)
+            {
+                return None;
+            }
+        }
         for message in [
             "Восстановление не подтверждено. Проверяем состояние сна.",
             "",
@@ -372,6 +402,12 @@ pub fn preview(m: MainThreadMarker, path: &std::path::Path) -> Option<()> {
     if form.controller.preferredContentSize() != expected || expected.width != 304. {
         return None;
     }
+    if show_devices {
+        form.set_devices(crate::device_charge::read());
+        form.devices_expanded.set(true);
+        form.render(&r, &report, 60, "", "", 0.);
+    }
+    let expected = form.controller.preferredContentSize();
     let view = form.controller.view();
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(

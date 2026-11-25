@@ -23,7 +23,7 @@ pub(crate) struct Form {
     summary: Retained<NSTextField>,
     pub(crate) error: Retained<NSTextField>,
     pub recover: Retained<NSButton>,
-    rules: [Retained<NSBox>; 3],
+    rules: [Retained<NSBox>; 4],
     duration: Retained<NSTextField>,
     pub presets: Retained<NSSegmentedControl>,
     custom: Retained<NSTextField>,
@@ -36,7 +36,11 @@ pub(crate) struct Form {
     details_button: Retained<NSButton>,
     details: Retained<NSGridView>,
     battery_note: Retained<NSTextField>,
-    pub automatic: Retained<NSButton>,
+    charge_title: Retained<NSButton>,
+    device_list: Retained<NSScrollView>,
+    device_doc: Retained<NSView>,
+    device_reading: std::cell::RefCell<Option<crate::device_charge::Reading>>,
+    pub devices_expanded: Cell<bool>,
     pub login: Retained<NSButton>,
     quit: Retained<NSButton>,
     pub updates: Retained<NSButton>,
@@ -186,7 +190,14 @@ impl Form {
             .unwrap();
             root.addSubview(&details);
             let battery_note = text("", 11., 0., true);
-            let automatic = btn("Автоматический режим", 6, true, false);
+            let charge_title = btn("Заряд устройств ⌄", 11, false, false);
+            charge_title.setAlignment(NSTextAlignment::Left);
+            let device_doc: Retained<NeSpatPanelContent> =
+                objc2::msg_send![NeSpatPanelContent::alloc(m),initWithFrame:NSRect::ZERO];
+            let device_list = NSScrollView::new(m);
+            device_list.setDrawsBackground(false);
+            device_list.setDocumentView(Some(&device_doc));
+            root.addSubview(&device_list);
             let login = btn("Запускать при входе", 7, true, false);
             let quit = btn("Выход", 8, false, false);
             quit.setKeyEquivalent(&ns("q"));
@@ -217,7 +228,11 @@ impl Form {
                 details_button,
                 details,
                 battery_note,
-                automatic,
+                charge_title,
+                device_list,
+                device_doc: device_doc.into_super(),
+                device_reading: Default::default(),
+                devices_expanded: Cell::new(false),
                 login,
                 quit,
                 updates,
@@ -226,6 +241,69 @@ impl Form {
                 expanded: Cell::new(false),
             }
         }
+    }
+    pub(crate) fn set_devices(&self, reading: crate::device_charge::Reading) {
+        if self.device_reading.borrow().as_ref() == Some(&reading) {
+            return;
+        }
+        let m = self.device_doc.mtm();
+        let views = self.device_doc.subviews();
+        for i in 0..views.count() {
+            views.objectAtIndex(i).removeFromSuperview();
+        }
+        let icon = |symbol: &str, x: f64, y: f64, w: f64, color: &NSColor| {
+            if let Some(img) =
+                NSImage::imageWithSystemSymbolName_accessibilityDescription(&ns(symbol), None)
+            {
+                let v = NSImageView::imageViewWithImage(&img, m);
+                v.setContentTintColor(Some(color));
+                place(&v, x, y, w, 16.);
+                self.device_doc.addSubview(&v);
+            }
+        };
+        let mut y = 0.;
+        for d in &reading.devices {
+            icon(d.icon, 0., y + 2., 17., &NSColor::secondaryLabelColor());
+            let name = label(m, &d.name, 11., 0., false);
+            name.setToolTip(Some(&ns(&d.name)));
+            place(&name, 22., y + 2., 165., 17.);
+            self.device_doc.addSubview(&name);
+            let text = d
+                .percent
+                .map_or_else(|| "—".to_owned(), |n| format!("{n}%"));
+            let value = label(m, &text, 11., 0.1, false);
+            value.setAlignment(NSTextAlignment::Right);
+            place(&value, 218., y + 2., 40., 17.);
+            self.device_doc.addSubview(&value);
+            if let Some(n) = d.percent {
+                let symbol = if d.charging {
+                    "battery.100.bolt"
+                } else {
+                    match n {
+                        0..=12 => "battery.0",
+                        13..=37 => "battery.25",
+                        38..=62 => "battery.50",
+                        63..=87 => "battery.75",
+                        _ => "battery.100",
+                    }
+                };
+                let color = if n <= 20 && !d.charging {
+                    NSColor::systemYellowColor()
+                } else {
+                    NSColor::systemGreenColor()
+                };
+                icon(symbol, 193., y + 2., 22., &color);
+            }
+            y += 21.;
+        }
+        if !reading.note.is_empty() {
+            let f = label(m, &reading.note, 11., 0., true);
+            place(&f, 0., y + 1., 258., 17.);
+            self.device_doc.addSubview(&f);
+            y += 19.;
+        }
+        self.device_doc.setFrameSize(NSSize::new(260., y));
+        *self.device_reading.borrow_mut() = Some(reading);
     }
     pub(crate) fn render(
         &self,
@@ -344,8 +422,23 @@ impl Form {
         }
         extra(&self.battery_note, &r.note, &mut y);
         rule(2, &mut y);
-        place(&self.automatic, 12., y, 210., 18.);
-        y += 22.;
+        let expanded = self.devices_expanded.get();
+        self.charge_title.setTitle(&ns(if expanded {
+            "Заряд устройств  ⌃"
+        } else {
+            "Заряд устройств  ⌄"
+        }));
+        place(&self.charge_title, 12., y, 276., 20.);
+        y += 23.;
+        self.device_list.setHidden(!expanded);
+        if expanded {
+            let h = self.device_doc.frame().size.height.min(118.);
+            self.device_list
+                .setHasVerticalScroller(self.device_doc.frame().size.height > h);
+            place(&self.device_list, 14., y, 272., h);
+            y += h + 4.;
+        }
+        rule(3, &mut y);
         place(&self.login, 12., y, 192., 18.);
         place(&self.quit, 235., y, 52., 18.);
         y += 24.;
