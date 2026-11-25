@@ -256,3 +256,20 @@ fn main() -> Result<()> {
     env::set_current_dir(root)?;
     package(Path::new(out))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn panel_declares_why_it_requests_bluetooth_access() {
+        let info =
+            plist::Value::from_reader_xml(&include_bytes!("../../../Resources/Info.plist")[..])
+                .unwrap();
+        assert!(
+            info.as_dictionary()
+                .and_then(|d| d.get("NSBluetoothAlwaysUsageDescription"))
+                .and_then(plist::Value::as_string)
+                .is_some_and(|s| !s.trim().is_empty()),
+            "missing Bluetooth purpose string"
+        );
+    }
+}
